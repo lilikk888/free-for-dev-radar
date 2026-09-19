@@ -1,0 +1,4 @@
+# 统一用 LF，避免 Windows/Linux 协作时 git 一直提示换行符转换
+* text=auto eol=lf
+*.png binary
+*.jpg binary
