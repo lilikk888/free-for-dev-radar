@@ -71,7 +71,7 @@ jobs:
         run: echo "已推送：${{ steps.meta.outputs.tags }}"
 
   deploy:
-    name: 部署到 k3s
+    name: 部署到 Kubernetes
     needs: build
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
