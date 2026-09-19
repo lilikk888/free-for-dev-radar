@@ -1,0 +1,10 @@
+[project]
+name = "free-for-dev-radar"
+version = "0.1.0"
+description = "盯着 free-for-dev 的 README，抓出新增、下线和免费额度变更"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"

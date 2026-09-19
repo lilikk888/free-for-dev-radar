@@ -1,0 +1,24 @@
+services:
+  radar:
+    build: .
+    image: free-for-dev-radar:local
+    ports:
+      - "8000:8000"
+    environment:
+      RADAR_DB_PATH: /data/radar.db
+    volumes:
+      - radar-data:/data
+    restart: unless-stopped
+
+  # 想本地体验定时采集可以打开：
+  # cron:
+  #   build: .
+  #   image: free-for-dev-radar:local
+  #   command: ["python", "-m", "app.cli", "collect"]
+  #   environment:
+  #     RADAR_DB_PATH: /data/radar.db
+  #   volumes:
+  #     - radar-data:/data
+
+volumes:
+  radar-data:

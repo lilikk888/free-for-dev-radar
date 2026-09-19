@@ -1,0 +1,60 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: radar
+  namespace: radar
+  labels:
+    app.kubernetes.io/name: radar
+spec:
+  replicas: 1
+  # PVC 是 ReadWriteOnce，滚动更新会卡在"新 Pod 等旧 Pod 释放卷"，所以用 Recreate
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: radar
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: radar
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: radar
+          image: ghcr.io/owner/free-for-dev-radar:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: RADAR_DB_PATH
+              value: /data/radar.db
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: radar-data

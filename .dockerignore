@@ -1,0 +1,13 @@
+.git
+.github
+k8s
+tests
+data
+*.db
+*.db-wal
+*.db-shm
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+README.md

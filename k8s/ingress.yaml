@@ -1,0 +1,23 @@
+---
+# 故意不写 host：Cloudflare Quick Tunnel 给的域名每次重启都变，
+# 用 catch-all 规则才能让随机域名命中。等换成命名隧道 + 固定域名后，
+# 再把 host 改成 radar.你的域名。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: radar
+  namespace: radar
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: radar
+                port:
+                  number: 80
