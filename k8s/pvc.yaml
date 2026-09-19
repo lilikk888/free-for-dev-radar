@@ -1,5 +1,6 @@
 ---
-# k3s 自带 local-path provisioner，单节点场景下 RWO 就够用
+# kubeadm 集群不自带存储插件，这里用的 local-path-provisioner 是手动装的
+# （k3s 内置的那个同名 Provisioner 已随 k3s 卸载）。单节点场景下 RWO 就够用
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

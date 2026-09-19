@@ -45,22 +45,46 @@ pytest -v
 docker compose up --build
 ```
 
-## 部署到 k3s
+## 部署到 Kubernetes（kubeadm）
 
 清单在 `k8s/`，用 kustomize（`kubectl` 内置）渲染，镜像地址和 tag 都不用硬编码。
 
-**第一次部署前必须做的三件事：**
+### 集群需要预先装好的东西
+
+kubeadm 装出来的是一个"空壳"集群，下面这些组件**必须自己装**——这正是它和 k3s 最大的差别
+（k3s 会把这些全打包好，便利但也把运维细节一起藏掉了）：
+
+| 组件 | 用途 | 安装方式 |
+|---|---|---|
+| Calico v3.30.0 | CNI 网络插件 | `kubectl apply -f` 官方 manifest |
+| ingress-nginx | Ingress 控制器（替代 k3s 内置的 Traefik） | Helm，DaemonSet + hostPort 80/443 |
+| local-path-provisioner | 提供 `local-path` StorageClass | `kubectl apply -f` 官方 manifest |
+
+控制面是 4 个独立 static pod（etcd / kube-apiserver / kube-scheduler / kube-controller-manager），
+存储用真 etcd；容器运行时是 containerd（`SystemdCgroup = true`），kubelet 走 systemd cgroup driver。
+
+### 一次性准备
+
+给部署用户配好 kubeconfig（流水线里用的是**不带 sudo** 的 `kubectl`）：
+
+```bash
+mkdir -p ~/.kube
+sudo cp -f /etc/kubernetes/admin.conf ~/.kube/config
+sudo chown $(id -u):$(id -g) ~/.kube/config
+```
+
+**部署前必须做的三件事：**
 
 1. **改 owner**：把 `k8s/*.yaml` 里的 `ghcr.io/owner/` 换成你的 GitHub 用户名。
    （流水线会自动 sed，但手动 `kubectl apply` 时需要你自己改对）
 2. **把 GHCR 包设为公开**：GitHub 仓库 → 右下角 Packages → 选镜像 →
    Package settings → Change visibility → Public。
-   否则 k3s 拉不动镜像（私有仓库需要额外的 imagePullSecret）
+   否则节点拉不动镜像（私有仓库需要额外的 imagePullSecret）
 3. **配 3 个仓库 Secret**（Settings → Secrets and variables → Actions）：
 
    | Secret | 值 |
    |---|---|
-   | `K3S_HOST` | 服务器公网 IP |
+   | `K3S_HOST` | 节点 IP（名字里的 K3S 是历史遗留，就是这台 k8s 节点） |
    | `K3S_USER` | `ubuntu` |
    | `K3S_SSH_KEY` | 部署用私钥的全文 |
 

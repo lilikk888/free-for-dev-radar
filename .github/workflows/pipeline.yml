@@ -122,7 +122,7 @@ jobs:
           sed -i "s|newTag:.*|newTag: $TAG|" k8s/kustomization.yaml
           kubectl kustomize k8s/ | ssh -i ~/.ssh/id_ed25519 \
             "$K3S_USER@$K3S_HOST" \
-            "sudo k3s kubectl apply -f -"
+            "kubectl apply -f -"
 
       - name: 等待滚动更新结束
         env:
@@ -131,7 +131,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/id_ed25519 \
             "$K3S_USER@$K3S_HOST" \
-            "sudo k3s kubectl -n radar rollout status deployment/radar --timeout=180s"
+            "kubectl -n radar rollout status deployment/radar --timeout=180s"
 
       - name: 冒烟测试
         env:

@@ -2,15 +2,16 @@
 # 故意不写 host：Cloudflare Quick Tunnel 给的域名每次重启都变，
 # 用 catch-all 规则才能让随机域名命中。等换成命名隧道 + 固定域名后，
 # 再把 host 改成 radar.你的域名。
+#
+# 控制器从 k3s 内置的 traefik 换成了手动安装的 ingress-nginx
+# （kubeadm 不自带 Ingress 控制器，这是必须自己装的一环）。
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: radar
   namespace: radar
-  annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
 spec:
-  ingressClassName: traefik
+  ingressClassName: nginx
   rules:
     - http:
         paths:
