@@ -84,33 +84,61 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 检查部署密钥已配置
+        env:
+          K3S_HOST: ${{ secrets.K3S_HOST }}
+          K3S_USER: ${{ secrets.K3S_USER }}
+          K3S_SSH_KEY: ${{ secrets.K3S_SSH_KEY }}
+        run: |
+          missing=""
+          if [ -z "$K3S_HOST" ]; then missing="$missing K3S_HOST"; fi
+          if [ -z "$K3S_USER" ]; then missing="$missing K3S_USER"; fi
+          if [ -z "$K3S_SSH_KEY" ]; then missing="$missing K3S_SSH_KEY"; fi
+          if [ -n "$missing" ]; then
+            echo "::error::缺少仓库密钥:$missing 。请在 Settings -> Secrets and variables -> Actions 中添加后重新运行。"
+            exit 1
+          fi
+          echo "部署密钥检查通过"
+
       - name: 配置 SSH 密钥
+        env:
+          K3S_HOST: ${{ secrets.K3S_HOST }}
+          K3S_SSH_KEY: ${{ secrets.K3S_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.K3S_SSH_KEY }}" > ~/.ssh/id_ed25519
+          printf '%s\n' "$K3S_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "${{ secrets.K3S_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H "$K3S_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: 渲染清单并 apply
+        env:
+          K3S_HOST: ${{ secrets.K3S_HOST }}
+          K3S_USER: ${{ secrets.K3S_USER }}
         run: |
-          TAG="sha-$(echo '${{ github.sha }}' | cut -c1-7)"
+          TAG="sha-$(echo "$GITHUB_SHA" | cut -c1-7)"
           echo "部署 tag：$TAG"
           sed -i "s|ghcr.io/owner/free-for-dev-radar|${{ env.IMAGE }}|g" \
             k8s/kustomization.yaml k8s/deployment.yaml k8s/cronjob.yaml
           sed -i "s|newTag:.*|newTag: $TAG|" k8s/kustomization.yaml
           kubectl kustomize k8s/ | ssh -i ~/.ssh/id_ed25519 \
-            "${{ secrets.K3S_USER }}@${{ secrets.K3S_HOST }}" \
+            "$K3S_USER@$K3S_HOST" \
             "sudo k3s kubectl apply -f -"
 
       - name: 等待滚动更新结束
+        env:
+          K3S_HOST: ${{ secrets.K3S_HOST }}
+          K3S_USER: ${{ secrets.K3S_USER }}
         run: |
           ssh -i ~/.ssh/id_ed25519 \
-            "${{ secrets.K3S_USER }}@${{ secrets.K3S_HOST }}" \
+            "$K3S_USER@$K3S_HOST" \
             "sudo k3s kubectl -n radar rollout status deployment/radar --timeout=180s"
 
       - name: 冒烟测试
+        env:
+          K3S_HOST: ${{ secrets.K3S_HOST }}
+          K3S_USER: ${{ secrets.K3S_USER }}
         run: |
           sleep 5
           ssh -i ~/.ssh/id_ed25519 \
-            "${{ secrets.K3S_USER }}@${{ secrets.K3S_HOST }}" \
+            "$K3S_USER@$K3S_HOST" \
             "curl -fsS -o /dev/null -w 'healthz -> %{http_code}\n' http://localhost/healthz"
