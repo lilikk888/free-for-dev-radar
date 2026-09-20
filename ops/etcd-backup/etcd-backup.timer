@@ -1,0 +1,19 @@
+[Unit]
+Description=定时触发 etcd 备份
+
+[Timer]
+# 每天 03:30。刻意避开整点 —— 整点常常挤着一堆别的定时任务
+OnCalendar=*-*-* 03:30:00
+
+# ⭐ Persistent=true 很重要：
+# 如果计划时间点机器没开机（或 systemd 还没起来），开机后会**补跑一次**。
+# 不加这个的话，机器半夜重启一次，当天的备份就静默消失了。
+Persistent=true
+
+# 加随机抖动，避免将来多台节点同时备份打满带宽 / 磁盘 IO
+RandomizedDelaySec=300
+
+Unit=etcd-backup.service
+
+[Install]
+WantedBy=timers.target

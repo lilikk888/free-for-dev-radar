@@ -1,0 +1,25 @@
+[Unit]
+Description=etcd 快照备份（校验 + 加密 + 异机留存）
+# 放在宿主机而不是 K8s：集群坏了的时候 K8s CronJob 根本跑不起来，
+# 而那时恰恰最需要备份。详见 etcd-backup.sh 顶部的说明。
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/etcd-backup.sh
+
+# 快照约 30 MB，正常几秒到几十秒；深度校验（真恢复一次）会久一点
+TimeoutStartSec=900
+
+# 备份是后台任务，不要和业务抢 CPU / IO
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=etcd-backup
+
+[Install]
+WantedBy=multi-user.target
