@@ -83,16 +83,16 @@ class RadarStateCollector:
                 "SELECT fetched_at, entry_count FROM snapshots ORDER BY id DESC LIMIT 1"
             ).fetchone()
 
-            entries = GaugeMetricFamily(
-                "radar_entries_total", "最近一次快照解析出的条目总数", value=0
+            # ⚠️ 注意：GaugeMetricFamily 不要传 value=...，那会额外塞一个默认样本，
+            # 再 add_metric 就变成「同名同标签两个样本」，Prometheus 会以
+            # duplicate sample 为由**拒绝整个抓取**。一律只用 add_metric。
+            entries = GaugeMetricFamily("radar_entries_total", "最近一次快照解析出的条目总数")
+            ts_family = GaugeMetricFamily(
+                "radar_last_snapshot_timestamp_seconds", "最近一次采集完成时的 Unix 时间戳"
             )
             age = GaugeMetricFamily(
                 "radar_last_snapshot_age_seconds",
                 "距最近一次成功采集已经过去多少秒（采集挂了它会一直涨，用来报警）",
-                value=float("nan"),
-            )
-            ts_family = GaugeMetricFamily(
-                "radar_last_snapshot_timestamp_seconds", "最近一次采集完成时的 Unix 时间戳"
             )
 
             if latest is not None:
@@ -101,6 +101,10 @@ class RadarStateCollector:
                 if parsed is not None:
                     ts_family.add_metric([], parsed)
                     age.add_metric([], max(0.0, time.time() - parsed))
+            else:
+                # 从没成功采集过。这两个指标刻意不输出（而不是输出 NaN 或 0）——
+                # 「没有数据」和「数据是 0」是两件事，用 absent() 报警更准确。
+                entries.add_metric([], 0)
 
             yield entries
             yield ts_family

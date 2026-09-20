@@ -50,6 +50,20 @@ spec:
               距最近一次成功采集已 {{ $value | humanizeDuration }}。
               可能原因：CronJob 被 suspend、镜像拉取失败、上游不可达、Pod 调度不上。
 
+        - alert: RadarNeverCollected
+          # 「没有这个指标」和「指标值为 0」是两件事，所以用 absent() 而不是阈值比较。
+          # 这个指标完全不存在 = 库里从来没有过快照，或 /metrics 根本抓不到。
+          expr: absent(radar_last_snapshot_age_seconds)
+          for: 15m
+          labels:
+            severity: critical
+            component: radar
+          annotations:
+            summary: "radar 从未成功采集过（快照年龄指标不存在）"
+            description: >-
+              radar_last_snapshot_age_seconds 完全缺失。先确认 CronJob 是否跑过
+              （kubectl -n radar get jobs）、PVC 是否正常挂载、/metrics 是否可达。
+
         # ---- 数据质量 ----
 
         - alert: RadarEntriesDropped

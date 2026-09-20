@@ -106,6 +106,36 @@ def test_unknown_paths_collapse_to_other(client):
     assert 'path="other"' in body
 
 
+def test_no_duplicate_samples(client):
+    """Prometheus 会因为 duplicate sample **拒绝整个抓取** —— 这个坑必须用测试挡住。
+
+    典型写错方式：GaugeMetricFamily(name, doc, value=0) 会塞一个值为 0 的默认样本，
+    再调 add_metric() 就变成「同名同标签两个样本」。当时就是靠肉眼读 /metrics 输出
+    才发现 radar_entries_total 出现了两次（一次 0.0、一次 1334.0）。
+    """
+    body = client.get("/metrics").text
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for line in body.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        key = line.rsplit(" ", 1)[0]  # 去掉数值，只留 "指标名{标签}"
+        if key in seen:
+            duplicates.add(key)
+        seen.add(key)
+    assert not duplicates, f"出现重复样本（Prometheus 会拒绝抓取）: {sorted(duplicates)}"
+
+
+def test_no_nan_or_inf_samples(client):
+    """NaN / Inf 不是合法的暴露值，带着它 Prometheus 同样会抓取失败。"""
+    body = client.get("/metrics").text
+    for line in body.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        value = line.rsplit(" ", 1)[-1]
+        assert value not in ("NaN", "nan", "+Inf", "-Inf", "Inf"), f"非法样本值: {line}"
+
+
 def test_job_metrics_record_success():
     metrics.record_collect(
         1.25, ok=True, entries=1334, changes={"added": 2, "removed": 1}
