@@ -32,6 +32,11 @@ spec:
               env:
                 - name: RADAR_DB_PATH
                   value: /data/radar.db
+                # 采集是跑几秒就退出的短命进程，Prometheus 根本抓不到它，
+                # 所以把本次结果「推」到 Pushgateway 中转。
+                # 没装 Pushgateway 也不影响采集：推送失败会被吞掉（见 app/metrics.py）。
+                - name: RADAR_PUSHGATEWAY_URL
+                  value: http://pushgateway.monitoring.svc.cluster.local:9091
               volumeMounts:
                 - name: data
                   mountPath: /data

@@ -1,0 +1,42 @@
+---
+# Pushgateway —— 短命任务（CronJob）的指标中转站
+#
+# 为什么需要它：Prometheus 是「拉」模型，按固定间隔去抓目标。
+# 而 CronJob 每 6 小时才跑一次、每次几秒就退出 —— 抓的时候进程早没了。
+# Pushgateway 让短命任务主动「推」结果，Prometheus 再去抓 Pushgateway。
+#
+# 要注意的代价：Pushgateway 上的指标不会自动过期（除非任务下次运行覆盖），
+# 所以它只适合「最近一次运行结果」这类指标，不能当计数器长期累计。
+#
+# 安装：
+#   helm install pushgateway prometheus-community/prometheus-pushgateway \
+#     -n monitoring --version <见 helm search repo> \
+#     -f observability/values/pushgateway.yaml
+
+# 固定成 pushgateway，这样服务地址就是稳定的
+# http://pushgateway.monitoring.svc.cluster.local:9091
+fullnameOverride: pushgateway
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+# 让 Prometheus Operator 自动发现并抓取 pushgateway 自身
+serviceMonitor:
+  enabled: true
+  interval: 30s
+
+# 持久化：不加的话 Pod 重启会丢掉上一次的推送结果，
+# 导致 radar_collect_success 这类指标短暂消失、误触发告警。
+persistentVolume:
+  enabled: true
+  size: 1Gi
+  storageClass: local-path
+
+# 单节点实验环境，不需要多副本反亲和
+podAntiAffinity: soft

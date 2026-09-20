@@ -1,0 +1,306 @@
+---
+# radar 的业务仪表盘。
+#
+# 和 kube-prometheus-stack 自带的 30+ 个「集群视角」仪表盘互补：
+# 那些看的是「集群健不健康」，这个看的是「我的项目在不在干活」。
+#
+# 用 ConfigMap 交付而不是在 UI 里点出来：
+#   - 可版本控制、可复现，重装 Grafana 后自动回来
+#   - Grafana 的 dashboard sidecar 会扫描带 grafana_dashboard: "1" 标签的
+#     ConfigMap 并自动导入
+# ⚠️ 必须和 Grafana 放在同一个 namespace（monitoring），否则 sidecar 扫不到。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-radar
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  radar-business.json: |-
+    {
+      "uid": "radar-business",
+      "title": "radar · 业务指标",
+      "tags": ["radar", "business"],
+      "timezone": "",
+      "editable": true,
+      "schemaVersion": 39,
+      "refresh": "30s",
+      "time": { "from": "now-6h", "to": "now" },
+      "templating": { "list": [] },
+      "annotations": { "list": [] },
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "当前条目数",
+          "description": "最近一次快照解析出的条目总数",
+          "gridPos": { "h": 5, "w": 5, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "refId": "A", "expr": "radar_entries_total" }],
+          "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "value",
+            "graphMode": "area",
+            "textMode": "auto"
+          }
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "距上次成功采集",
+          "description": "超过 9 小时说明采集链路断了（CronJob 周期是 6 小时）",
+          "gridPos": { "h": 5, "w": 5, "x": 5, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "refId": "A", "expr": "radar_last_snapshot_age_seconds" }],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 25200 },
+                  { "color": "red", "value": 32400 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "background",
+            "graphMode": "area",
+            "textMode": "auto"
+          }
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "最近一次采集",
+          "description": "来自 Pushgateway（CronJob 是短命进程，Prometheus 抓不到）",
+          "gridPos": { "h": 5, "w": 5, "x": 10, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "refId": "A", "expr": "radar_collect_success" }],
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": { "text": "失败", "color": "red", "index": 0 },
+                    "1": { "text": "成功", "color": "green", "index": 1 }
+                  }
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "auto"
+          }
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "本次采集耗时",
+          "gridPos": { "h": 5, "w": 4, "x": 15, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "refId": "A", "expr": "radar_collect_duration_seconds" }],
+          "fieldConfig": { "defaults": { "unit": "s", "decimals": 2 }, "overrides": [] },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "value",
+            "graphMode": "area",
+            "textMode": "auto"
+          }
+        },
+        {
+          "id": 5,
+          "type": "stat",
+          "title": "历史快照数",
+          "gridPos": { "h": 5, "w": 5, "x": 19, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "refId": "A", "expr": "radar_snapshots_total" }],
+          "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "value",
+            "graphMode": "area",
+            "textMode": "auto"
+          }
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "条目数趋势",
+          "description": "骤降通常意味着上游格式变了、解析器漏条目",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "refId": "A", "expr": "radar_entries_total", "legendFormat": "条目数" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "stepAfter",
+                "lineWidth": 2,
+                "fillOpacity": 8,
+                "showPoints": "always",
+                "pointSize": 5,
+                "spanNulls": false
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "single", "sort": "none" }
+          }
+        },
+        {
+          "id": 7,
+          "type": "timeseries",
+          "title": "累计变更数（按类型）",
+          "description": "added / removed / updated —— 这个雷达到底抓到了什么",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (change_type) (radar_changes_total)",
+              "legendFormat": "{{change_type}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "stepAfter",
+                "lineWidth": 2,
+                "fillOpacity": 12,
+                "showPoints": "always",
+                "pointSize": 5,
+                "spanNulls": false
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          }
+        },
+        {
+          "id": 8,
+          "type": "timeseries",
+          "title": "采集耗时趋势",
+          "description": "变慢通常是上游网络问题；超过 60 秒会触发告警",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "refId": "A", "expr": "radar_collect_duration_seconds", "legendFormat": "耗时" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "stepAfter",
+                "lineWidth": 2,
+                "fillOpacity": 8,
+                "showPoints": "always",
+                "pointSize": 5,
+                "spanNulls": false
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "single", "sort": "none" }
+          }
+        },
+        {
+          "id": 9,
+          "type": "timeseries",
+          "title": "HTTP 请求速率（按路径与状态码）",
+          "description": "path 标签用路由模板而不是原始路径，防止被扫描器把标签基数打爆",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (path, status) (rate(radar_http_requests_total[5m]))",
+              "legendFormat": "{{path}} · {{status}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "fillOpacity": 8,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "table", "placement": "right", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          }
+        },
+        {
+          "id": 10,
+          "type": "timeseries",
+          "title": "5xx 错误率",
+          "description": "对应告警 RadarHttpErrorRate（阈值 5%）",
+          "gridPos": { "h": 7, "w": 24, "x": 0, "y": 21 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(increase(radar_http_requests_total{status=~\"5..\"}[10m])) / clamp_min(sum(increase(radar_http_requests_total[10m])), 1)",
+              "legendFormat": "5xx 占比"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "fillOpacity": 15,
+                "showPoints": "never"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 0.05 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "single", "sort": "none" }
+          }
+        }
+      ]
+    }

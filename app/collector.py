@@ -61,7 +61,8 @@ def _latest_snapshot_id(conn: sqlite3.Connection) -> int | None:
 
 def _diff(
     conn: sqlite3.Connection, previous_snapshot_id: int, entries: list[Entry]
-) -> list[tuple[Any, ...]]:
+) -> tuple[list[tuple[Any, ...]], dict[str, int]]:
+    """返回 (待插入的变更行, 按类型统计的变更数)。"""
     previous = {
         row["entry_key"]: row
         for row in conn.execute(
@@ -107,7 +108,12 @@ def _diff(
                 )
             )
 
-    return rows
+    by_type: dict[str, int] = {}
+    for row in rows:
+        kind = row[1]  # 行结构：(detected_at, change_type, entry_key, ...)
+        by_type[kind] = by_type.get(kind, 0) + 1
+
+    return rows, by_type
 
 
 def collect(conn: sqlite3.Connection, markdown: str | None = None) -> dict[str, Any]:
@@ -118,7 +124,12 @@ def collect(conn: sqlite3.Connection, markdown: str | None = None) -> dict[str, 
         raise FetchError("解析结果为空 —— 上游格式可能变了，或抓到的不是预期页面")
 
     previous_snapshot_id = _latest_snapshot_id(conn)
-    changes = _diff(conn, previous_snapshot_id, entries) if previous_snapshot_id else []
+    if previous_snapshot_id is None:
+        # 第一次采集没有对比基准，不算变更
+        changes: list[tuple[Any, ...]] = []
+        changes_by_type: dict[str, int] = {}
+    else:
+        changes, changes_by_type = _diff(conn, previous_snapshot_id, entries)
 
     timestamp = _now()
     cursor = conn.execute(
@@ -149,5 +160,6 @@ def collect(conn: sqlite3.Connection, markdown: str | None = None) -> dict[str, 
         "fetched_at": timestamp,
         "entry_count": len(entries),
         "changes": len(changes),
+        "changes_by_type": changes_by_type,
         "baseline": previous_snapshot_id is None,
     }

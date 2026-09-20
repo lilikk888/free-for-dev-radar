@@ -34,6 +34,12 @@ grafana:
     server:
       root_url: "%(protocol)s://%(domain)s/grafana/"
       serve_from_sub_path: true
+    # 原生中文界面。不开这个的话，用户容易用浏览器翻译，而浏览器翻译会直接改 DOM，
+    # 把 Grafana 首页（React + SVG）搞崩：
+    #   NotFoundError: Failed to execute 'insertBefore' on 'Node'
+    # 注意 Grafana 官方汉化并不完整，只覆盖部分界面。
+    users:
+      default_language: zh-Hans
 
   # ⚠️ 开了 serve_from_sub_path 之后，Grafana 会把所有端点都挂到 /grafana 下，
   # 连 /metrics 也变成 /grafana/metrics（直接请求 /metrics 会 301 跳转）。

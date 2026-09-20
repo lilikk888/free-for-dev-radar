@@ -1,2 +1,4 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
+# /metrics 端点 + 指标定义（Web 侧暴露，CronJob 侧推 Pushgateway）
+prometheus-client>=0.21

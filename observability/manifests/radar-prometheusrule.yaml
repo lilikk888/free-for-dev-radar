@@ -1,0 +1,107 @@
+---
+# radar 的告警规则。
+#
+# 设计思路：告警要打在「用户会受影响」的地方，而不是「某个指标动了」。
+# 对变更雷达来说，用户唯一在意的是：**它还在正常盯着上游吗？**
+#
+# 两条主线：
+#   1. 采集链路（CronJob）是否还活着  -> radar_collect_* （来自 Pushgateway）
+#   2. 数据是否还新鲜、是否异常骤降    -> radar_last_snapshot_age_seconds / radar_entries_total
+#
+# 注意 radar_last_snapshot_age_seconds 这条不依赖 Pushgateway：
+# 就算 CronJob 整个起不来（比如被 suspend 了、镜像拉不下来），
+# 快照年龄也会一直涨，所以它是最后一道保险。
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: radar
+  namespace: radar
+  labels:
+    app.kubernetes.io/name: radar
+spec:
+  groups:
+    - name: radar.business
+      rules:
+        # ---- 采集链路 ----
+
+        - alert: RadarCollectFailed
+          # CronJob 每 6 小时跑一次，上一次失败就该知道了
+          expr: radar_collect_success == 0
+          for: 1m
+          labels:
+            severity: critical
+            component: radar
+          annotations:
+            summary: "radar 最近一次采集失败"
+            description: >-
+              CronJob 采集返回失败（radar_collect_success == 0）。
+              看日志：kubectl -n radar logs -l app.kubernetes.io/name=radar-collect --tail=100
+
+        - alert: RadarSnapshotStale
+          # 9 小时 = 6 小时周期 + 3 小时容错。这是不依赖 Pushgateway 的兜底告警。
+          expr: radar_last_snapshot_age_seconds > 9 * 3600
+          for: 15m
+          labels:
+            severity: critical
+            component: radar
+          annotations:
+            summary: "radar 已超过 9 小时没有成功采集"
+            description: >-
+              距最近一次成功采集已 {{ $value | humanizeDuration }}。
+              可能原因：CronJob 被 suspend、镜像拉取失败、上游不可达、Pod 调度不上。
+
+        # ---- 数据质量 ----
+
+        - alert: RadarEntriesDropped
+          # 条目数比一天前少 20% 以上。真被上游删掉这么多不太可能，
+          # 更可能是解析器跟不上上游格式变化（部分解析成功、部分丢失）。
+          expr: >
+            radar_entries_total
+              < (radar_entries_total offset 1d) * 0.8
+          for: 30m
+          labels:
+            severity: warning
+            component: radar
+          annotations:
+            summary: "radar 条目数比一天前骤降超过 20%"
+            description: >-
+              当前 {{ $value | humanize }} 条。
+              优先怀疑上游 README 格式变了导致解析器漏条目，而不是真被删了。
+
+        - alert: RadarCollectSlow
+          # 采集耗时超过 60 秒 —— 上游变慢或网络抖动，再慢下去可能撞上 CronJob 超时
+          expr: radar_collect_duration_seconds > 60
+          for: 5m
+          labels:
+            severity: warning
+            component: radar
+          annotations:
+            summary: "radar 采集耗时超过 60 秒"
+            description: "最近一次采集耗时 {{ $value | humanizeDuration }}，关注上游可达性和网络。"
+
+        # ---- 应用本身 ----
+
+        - alert: RadarHttpErrorRate
+          # 5xx 占比超过 5%（用 increase 而不是 rate，避免采样点太少时抖动）
+          expr: >
+            sum(increase(radar_http_requests_total{status=~"5.."}[10m]))
+              /
+            clamp_min(sum(increase(radar_http_requests_total[10m])), 1)
+              > 0.05
+          for: 10m
+          labels:
+            severity: warning
+            component: radar
+          annotations:
+            summary: "radar 5xx 错误率超过 5%"
+            description: "最近 10 分钟 5xx 占比 {{ $value | humanizePercentage }}。"
+
+        - alert: RadarTargetDown
+          expr: up{job="radar"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            component: radar
+          annotations:
+            summary: "Prometheus 抓不到 radar 的 /metrics"
+            description: "radar 的 ServiceMonitor target 已经 down 5 分钟，检查 Pod 是否 Ready。"

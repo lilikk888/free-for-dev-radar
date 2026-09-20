@@ -9,6 +9,7 @@ radar 应用跑在一个 kubeadm 单节点集群上，这一层负责回答"集�
 | kube-prometheus-stack | 91.4.1 | Prometheus + Grafana + Alertmanager + node-exporter + kube-state-metrics | `monitoring` |
 | Loki | 7.3.0 | 日志聚合（SingleBinary 模式 + filesystem 存储） | `monitoring` |
 | Promtail | 6.17.1 | DaemonSet，采集所有节点容器日志推给 Loki | `monitoring` |
+| Prometheus Pushgateway | 3.8.0 | 短命任务（CronJob）的指标中转站 | `monitoring` |
 
 **指标 + 日志都有**，这是后面做故障演练的前提：写 Postmortem 时你既要说"什么时候开始异常的"（指标），
 也要说"当时报了什么错"（日志）。只有其中一份都是空谈。
@@ -67,7 +68,74 @@ sudo NODE_IP=<节点内网IP> bash observability/scripts/enable-control-plane-me
 > `loki` 这个 release 名不能随便改：chart 的 fullname 逻辑在 release 名包含 chart 名时会省略后缀，
 > 所以叫 `loki` 才能得到 `http://loki:3100` 这个地址（Grafana 数据源和 Promtail 都依赖它）。
 
-## 三个必踩的坑
+## 把业务指标接进来（这个项目自己的指标）
+
+上面的东西监控的是「集群」，看不出「项目在不在干活」。业务指标由应用自己暴露，
+但**分两条路走**，因为常驻进程和短命进程的暴露方式根本不同：
+
+| 来源 | 谁产生 | 怎么被采集 | 指标 |
+|---|---|---|---|
+| Web Pod 的 `/metrics` | 常驻的 uvicorn 进程 | Prometheus 按 30s **拉** | `radar_entries_total`、`radar_changes_total{change_type}`、`radar_snapshots_total`、`radar_last_snapshot_age_seconds`、`radar_http_requests_total{method,path,status}` |
+| Pushgateway | CronJob（跑几秒就退出） | 任务**推**到 Pushgateway，Prometheus 再拉 Pushgateway | `radar_collect_success`、`radar_collect_duration_seconds`、`radar_collect_entries`、`radar_collect_changes{change_type}` |
+
+> **为什么必须有 Pushgateway**：Prometheus 是拉模型，按固定间隔去抓目标。
+> CronJob 每 6 小时才跑一次、每次几秒就退出 —— 抓的时候进程早没了。
+> 这是监控批处理任务的经典问题，Pushgateway 就是标准答案。
+>
+> 代价：Pushgateway 上的指标不会自动过期，所以它只适合放「最近一次运行结果」，
+> 不能当计数器长期累计。
+
+### 实现要点
+
+- `app/metrics.py` 里用了**两个独立的 CollectorRegistry**（`WEB_REGISTRY` / `JOB_REGISTRY`），
+  而不是默认的全局注册表 —— 否则推送时会把 Web 的指标一起推上 Pushgateway。
+- 库里的状态用**自定义 Collector** 暴露：每次 Prometheus 抓取时才去查 SQLite，
+  所以指标永远是最新的，也不用在 Web 进程里跑后台任务。
+- HTTP 请求计数的 `path` 标签用**路由模板**而不是原始路径，
+  否则随便一个扫描器打一堆 `/xxx` 进来就能把 Prometheus 的标签基数打爆。
+- CronJob **采集失败时也会推指标**（`radar_collect_success=0`）——
+  否则「任务挂了」这件事在监控里完全看不见，等于没监控。
+
+### 仪表盘与告警
+
+- 仪表盘：`manifests/grafana-dashboard-radar.yaml`（ConfigMap，sidecar 自动导入），
+  Grafana 里搜 **radar · 业务指标**
+- 告警规则：`manifests/radar-prometheusrule.yaml`，6 条：
+
+| 告警 | 触发条件 | 严重度 |
+|---|---|---|
+| `RadarCollectFailed` | 最近一次采集失败 | critical |
+| `RadarSnapshotStale` | 超过 9 小时没成功采集（**不依赖 Pushgateway 的兜底**）| critical |
+| `RadarEntriesDropped` | 条目数比一天前骤降 > 20% | warning |
+| `RadarCollectSlow` | 采集耗时 > 60s | warning |
+| `RadarHttpErrorRate` | 5xx 占比 > 5% | warning |
+| `RadarTargetDown` | Prometheus 抓不到 `/metrics` | warning |
+
+`RadarSnapshotStale` 值得单独说：就算 CronJob 整个起不来（被 suspend、镜像拉不动、
+上游不可达），快照年龄也会一直涨，所以它是最后一道保险，不依赖任何主动推送。
+
+### 安装
+
+```bash
+helm install pushgateway prometheus-community/prometheus-pushgateway \
+  -n monitoring --version 3.8.0 -f observability/values/pushgateway.yaml
+
+kubectl apply -f observability/manifests/radar-servicemonitor.yaml
+kubectl apply -f observability/manifests/radar-prometheusrule.yaml
+kubectl apply -f observability/manifests/grafana-dashboard-radar.yaml
+
+# 让 CronJob 知道往哪推（已写在 k8s/cronjob.yaml 的环境变量里）
+#   RADAR_PUSHGATEWAY_URL=http://pushgateway.monitoring.svc.cluster.local:9091
+
+# 手动触发一次采集，验证指标推到 Pushgateway
+kubectl -n radar create job --from=cronjob/radar-collect manual-collect-$RANDOM
+```
+
+> ServiceMonitor / PrometheusRule 是 Prometheus Operator 的 CRD，只能在装了
+> kube-prometheus-stack 的集群里 apply。所以它们刻意放在 `observability/` 而不是 `k8s/`：
+> `k8s/` 是应用本身（本地 kind 也能跑），这些是「平台如何接入应用」。
+
+## 四个必踩的坑
 
 ### 坑一：控制面指标默认抓不到（kubeadm 特有）
 
@@ -168,6 +236,40 @@ kubectl -n monitoring get pod -l app.kubernetes.io/name=kube-state-metrics \
 
 同理，排查 Pod 异常重启时**先看 `describe` 里的 Last State 和探针失败记录**，
 别一上来就怀疑代码。
+
+### 坑四：浏览器翻译会把 Grafana 首页搞崩
+
+现象：打开 Grafana 首页直接白屏报错
+
+```
+发生了意外的错误
+NotFoundError：未能在"Node"上执行"insertBefore"：新节点要插入的节点不是该节点的子节点
+```
+
+**判据**：如果报错堆栈里的函数名也被翻成了中文（`Suspense` → "悬疑现场"、`Main` → "主馆"…
+这种机器翻译痕迹），那就基本可以确定是**浏览器的网页翻译**在捣乱。
+
+原因：浏览器翻译是**直接改 DOM 文本节点**实现的，而 Grafana 首页是 React + SVG，
+React 做节点比对时发现原来的节点不见了 → `insertBefore` 抛 NotFoundError。
+这类问题不只 Grafana 有，任何重度 React 应用都可能中招。
+
+**两种解法**：
+
+1. **（推荐）关掉这个站点的翻译**：地址栏右侧翻译图标 → "不翻译此网站" / "显示原文"
+2. **让 Grafana 原生显示中文**，这样你就不需要翻译了：
+
+```yaml
+grafana:
+  grafana.ini:
+    users:
+      default_language: zh-Hans
+```
+
+> Grafana 官方汉化**并不完整**（只覆盖部分界面），但配了之后就不需要浏览器翻译，
+> 也就从根上避免了这个问题。
+
+**教训**：前端报了「DOM 节点找不到」这类错，先怀疑浏览器插件（翻译 / 广告拦截）
+在改 DOM，再去查应用本身的 bug。
 
 ## 资源占用（2 OCPU / 12 GB 单节点实测）
 

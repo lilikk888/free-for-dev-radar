@@ -1,0 +1,25 @@
+---
+# 让 Prometheus 抓 radar 业务应用的指标。
+#
+# 这是 Prometheus Operator 的 CRD，所以只能在装了 kube-prometheus-stack 的集群里 apply。
+# 刻意放在 observability/ 而不是 k8s/：k8s/ 是应用本身，本地 kind / 裸集群也能跑；
+# 这个清单是「监控平台如何接入应用」，属于平台侧配置。
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: radar
+  namespace: radar
+  labels:
+    app.kubernetes.io/name: radar
+spec:
+  namespaceSelector:
+    matchNames:
+      - radar
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: radar
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
