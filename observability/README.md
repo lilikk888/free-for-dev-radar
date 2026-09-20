@@ -67,9 +67,9 @@ sudo NODE_IP=<节点内网IP> bash observability/scripts/enable-control-plane-me
 > `loki` 这个 release 名不能随便改：chart 的 fullname 逻辑在 release 名包含 chart 名时会省略后缀，
 > 所以叫 `loki` 才能得到 `http://loki:3100` 这个地址（Grafana 数据源和 Promtail 都依赖它）。
 
-## 两个必踩的坑（都是 kubeadm 特有的）
+## 三个必踩的坑
 
-### 坑一：控制面指标默认抓不到
+### 坑一：控制面指标默认抓不到（kubeadm 特有）
 
 kubeadm 装完的集群，Prometheus 里这几个 job 会一直 **DOWN**：
 
@@ -115,6 +115,59 @@ grafana:
 ```
 （chart 自己的注释就提示了这点：*"Path to use for scraping metrics. Might be different if
 server.root_url is set in grafana.ini"*）
+
+### 坑三：Helm 键名写错不会报错，只会**静默忽略**
+
+kube-prometheus-stack 里同一个组件有**两套键**，长得很像但作用完全不同：
+
+| 键 | 是什么 |
+|---|---|
+| `kubeStateMetrics` | 只有 `enabled` 这类开关 |
+| **`kube-state-metrics`** | 子 chart 的真实配置（`resources` / 探针 / …） |
+| `nodeExporter` | 只有 `enabled` |
+| **`prometheus-node-exporter`** | 子 chart 的真实配置 |
+
+写错键名时 `helm install/upgrade` **不会报任何错**，值被直接丢掉。
+本项目第一版就把 `resources` 写在了 `kubeStateMetrics` 下，结果：
+
+```
+$ kubectl -n monitoring get pod -l app.kubernetes.io/name=kube-state-metrics \
+    -o jsonpath="{.items[0].spec.containers[0].resources}"
+{}          ← 空的！
+```
+
+没有资源保障 + 机器正在同时启动一堆组件 → kube-state-metrics 同步缓存变慢 →
+`/livez` 返回 503 → 默认探针（5s 超时、连失 3 次）把它连着杀了 4 次：
+
+```
+Warning  Unhealthy  kubelet  Liveness probe failed: HTTP probe failed with statuscode: 503
+Normal   Killing    kubelet  Container kube-state-metrics failed liveness probe, will be restarted
+```
+
+**修法**：写到正确的键下，并给单节点环境放宽探针。
+
+```yaml
+kube-state-metrics:
+  resources:
+    requests: {cpu: 20m, memory: 96Mi}
+    limits:   {memory: 320Mi}
+  livenessProbe:
+    httpGet: {path: /livez, port: http}
+    initialDelaySeconds: 20
+    periodSeconds: 15
+    timeoutSeconds: 10
+    failureThreshold: 6
+```
+
+**教训**：Helm values 写完后一定要回读实际对象验证，不能只看 `helm upgrade` 成功：
+
+```bash
+kubectl -n monitoring get pod -l app.kubernetes.io/name=kube-state-metrics \
+  -o jsonpath="{.items[0].spec.containers[0].resources}"
+```
+
+同理，排查 Pod 异常重启时**先看 `describe` 里的 Last State 和探针失败记录**，
+别一上来就怀疑代码。
 
 ## 资源占用（2 OCPU / 12 GB 单节点实测）
 

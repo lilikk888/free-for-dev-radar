@@ -129,13 +129,42 @@ prometheusOperator:
         limits:
           memory: 128Mi
 
+# ⚠️ 键名极易踩坑：kube-prometheus-stack 里同一组件有两套键
+#     kubeStateMetrics         -> 只有 enabled 这类开关
+#     kube-state-metrics       -> 子 chart 的真实配置（resources / probe …）
+#     nodeExporter             -> 只有 enabled
+#     prometheus-node-exporter -> 子 chart 的真实配置
+# 写到错的键上 Helm **不会报错**，会静默忽略 —— 第一版就把 resources 写在了
+# kubeStateMetrics 下，结果 Pod 的 resources 是空的，kube-state-metrics 因
+# /livez 超时(503)被探针反复杀掉。
 kubeStateMetrics:
+  enabled: true
+
+kube-state-metrics:
   resources:
     requests:
-      cpu: 10m
-      memory: 64Mi
+      cpu: 20m
+      memory: 96Mi
     limits:
       memory: 320Mi
+  # 单节点 2 OCPU 且同时启动一堆组件时，ksm 同步缓存会慢，
+  # 默认探针（5s 超时 / 连失 3 次）容易误杀。放宽到 10s / 6 次。
+  livenessProbe:
+    httpGet:
+      path: /livez
+      port: http
+    initialDelaySeconds: 20
+    periodSeconds: 15
+    timeoutSeconds: 10
+    failureThreshold: 6
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: metrics
+    initialDelaySeconds: 20
+    periodSeconds: 15
+    timeoutSeconds: 10
+    failureThreshold: 6
 
 prometheus-node-exporter:
   resources:
