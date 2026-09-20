@@ -104,6 +104,16 @@ sudo chown $(id -u):$(id -g) ~/.kube/config
 kubectl kustomize k8s/
 ```
 
+## 可观测性
+
+集群另外装了 Prometheus + Grafana + Alertmanager + Loki + Promtail，
+配置和踩坑记录见 **[`observability/README.md`](observability/README.md)**。
+
+- Grafana 在 `/grafana` 子路径（因为应用占了 catch-all 的 `/`）
+- 控制面指标（etcd / scheduler / controller-manager / kube-proxy）需要跑
+  `observability/scripts/enable-control-plane-metrics.sh` 才会被抓到
+- 装了监控栈之后，实例上的保活脚本已从 3 GB 缩到 1 GB（详见该文档）
+
 ## 排错
 
 | 现象 | 原因 |

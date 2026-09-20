@@ -1,0 +1,26 @@
+---
+# Grafana 数据源：Loki。
+# 关键在 labels.grafana_datasource: "1" —— Grafana 的 datasource sidecar 会扫描
+# 带这个标签的 ConfigMap 并自动注册成数据源，不需要手动在 UI 里配置。
+# （前提：grafana.sidecar.datasources.enabled = true，本仓库的 values 已开）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasource-loki
+  namespace: monitoring
+  labels:
+    grafana_datasource: "1"
+data:
+  loki-datasource.yaml: |-
+    apiVersion: 1
+    datasources:
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki:3100
+        isDefault: false
+        editable: false
+        jsonData:
+          maxLines: 5000
+          # 让 Grafana 能从日志行里识别出 pod / namespace 等字段，支持点击跳转
+          timeout: 60

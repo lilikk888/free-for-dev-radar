@@ -1,0 +1,146 @@
+---
+# kube-prometheus-stack（Prometheus + Grafana + Alertmanager + node-exporter + kube-state-metrics）
+# 面向单节点 2 OCPU / 12 GB kubeadm 集群调过资源。
+#
+# 安装：
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm repo update
+#   helm install monitoring prometheus-community/kube-prometheus-stack \
+#     --namespace monitoring --create-namespace \
+#     --version 91.4.1 \
+#     -f observability/values/kube-prometheus-stack.yaml
+
+# 给所有对象打统一标签，方便 kubectl -l stack=monitoring 批量筛选
+commonLabels:
+  stack: monitoring
+
+# 装 CRD（ServiceMonitor / PodMonitor / PrometheusRule 等）
+crds:
+  enabled: true
+
+# ---------- Grafana ----------
+grafana:
+  # ⚠️ 关键：只能挂 /grafana 子路径。
+  # 因为 radar 的 Ingress 已经占了 catch-all 的 "/"，同集群再加一个 "/" 会互相抢路由。
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    path: /grafana
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: 8m
+
+  # 子路径访问必须开 serve_from_sub_path，否则静态资源 404
+  grafana.ini:
+    server:
+      root_url: "%(protocol)s://%(domain)s/grafana/"
+      serve_from_sub_path: true
+
+  # ⚠️ 开了 serve_from_sub_path 之后，Grafana 会把所有端点都挂到 /grafana 下，
+  # 连 /metrics 也变成 /grafana/metrics（直接请求 /metrics 会 301 跳转）。
+  # 不改这里的话，Prometheus 的 monitoring-grafana 这个 target 永远 DOWN。
+  # （chart 自带注释就提示了这一点：Path … Might be different if server.root_url is set in grafana.ini）
+  serviceMonitor:
+    path: /grafana/metrics
+
+  persistence:
+    enabled: true
+    type: sts
+    storageClassName: local-path
+    accessModes:
+      - ReadWriteOnce
+    size: 2Gi
+
+  # 自带 30+ 个社区仪表盘（k8s 集群总览、节点、Pod、网络等）
+  sidecar:
+    dashboards:
+      enabled: true
+    datasources:
+      enabled: true
+
+  resources:
+    requests:
+      cpu: 20m
+      memory: 128Mi
+    limits:
+      memory: 640Mi
+
+# ---------- Prometheus ----------
+prometheus:
+  prometheusSpec:
+    retention: 15d
+
+    # 发现所有 namespace 的 ServiceMonitor / PodMonitor / PrometheusRule，
+    # 否则后面的 Loki、自定义 exporter 不会被自动抓取
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 8Gi
+
+    resources:
+      requests:
+        cpu: 50m
+        memory: 400Mi
+      limits:
+        memory: 1600Mi
+
+# ---------- Alertmanager ----------
+alertmanager:
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        memory: 320Mi
+
+# ---------- Operator 与各 exporter（按单节点压到最小） ----------
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  admissionWebhooks:
+    patch:
+      resources:
+        requests:
+          cpu: 5m
+          memory: 32Mi
+        limits:
+          memory: 128Mi
+
+kubeStateMetrics:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 320Mi
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 160Mi

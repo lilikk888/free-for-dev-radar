@@ -1,0 +1,41 @@
+---
+# Promtail —— 以 DaemonSet 形式在每个节点上采集容器日志，推给 Loki。
+#
+# 安装：
+#   helm install promtail grafana/promtail -n monitoring \
+#     --version 6.17.1 \
+#     -f observability/values/promtail.yaml
+
+# 关掉 chart 自带的 ServiceMonitor（简化：日志采集本身不需要被监控）
+serviceMonitor:
+  enabled: false
+
+config:
+  # Loki 用 SingleBinary 模式且关了 gateway，直接推 3100
+  clients:
+    - url: http://loki:3100/loki/api/v1/push
+      # 单节点本地网络，关闭压缩省 CPU
+      backoff_config:
+        min_period: 500ms
+        max_period: 5m
+        max_retries: 10
+
+  snippets:
+    # 只采 k8s 上来路清楚的日志，并给每条日志打上 namespace/pod/container 标签
+    extraRelabelConfigs:
+      - action: keep
+        source_labels:
+          - __meta_kubernetes_pod_phase
+        regex: Running
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+  limits:
+    memory: 200Mi
+
+# 每个节点都要跑，包括控制面节点
+tolerations:
+  - effect: NoSchedule
+    operator: Exists

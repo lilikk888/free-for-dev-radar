@@ -1,0 +1,117 @@
+---
+# Loki 单二进制模式（SingleBinary）—— 单节点实验环境最省资源的装法：
+# distributor / ingester / querier / compactor 等全部跑在同一个进程里，
+# 配合 filesystem 存储，不需要对象存储也不需要 MinIO。
+#
+# 安装：
+#   helm repo add grafana https://grafana.github.io/helm-charts
+#   helm install loki grafana/loki -n monitoring \
+#     --version 7.3.0 \
+#     -f observability/values/loki.yaml
+#
+# release 名必须是 loki，这样 Service 就叫 loki（fullname 会省略重复的 chart 名），
+# Grafana 数据源和 Promtail 都用 http://loki:3100。
+
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false          # 单节点不需要多租户鉴权
+  commonConfig:
+    replication_factor: 1      # 只有一份数据，复制因子必须为 1
+
+  storage:
+    type: filesystem           # 用本地盘，不依赖 S3/MinIO
+
+  schemaConfig:
+    configs:
+      - from: "2024-04-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: loki_index_
+          period: 24h
+
+  # 开日志保留，避免单节点磁盘被日志写满
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+  limits_config:
+    retention_period: 168h     # 保留 7 天
+
+  # 单节点不需要 pattern ingester（Loki 3.x 的新组件，默认占内存）
+  pattern_ingester:
+    enabled: false
+
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      memory: 1200Mi
+
+# ---- 关掉 scalable 模式的所有组件（SingleBinary 用不到，否则会白占资源） ----
+backend:
+  replicas: 0
+read:
+  replicas: 0
+write:
+  replicas: 0
+ingester:
+  replicas: 0
+distributor:
+  replicas: 0
+querier:
+  replicas: 0
+queryFrontend:
+  replicas: 0
+queryScheduler:
+  replicas: 0
+indexGateway:
+  replicas: 0
+compactor:
+  replicas: 0
+ruler:
+  replicas: 0
+bloomGateway:
+  replicas: 0
+bloomPlanner:
+  replicas: 0
+bloomBuilder:
+  replicas: 0
+patternIngester:
+  replicas: 0
+overridesExporter:
+  replicas: 0
+tableManager:
+  enabled: false
+
+# ---- 关掉缓存、网关、MinIO、自监控等可选件 ----
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+gateway:
+  enabled: false           # 关了之后直接访问 http://loki:3100
+minio:
+  enabled: false
+lokiCanary:
+  enabled: false
+test:
+  enabled: false
+monitoring:
+  selfMonitoring:
+    enabled: false
+    grafanaAgent:
+      installOperator: false
+  lokiCanary:
+    enabled: false
+sidecar:
+  rules:
+    enabled: false
