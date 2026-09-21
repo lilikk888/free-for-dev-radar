@@ -76,6 +76,88 @@ kubectl -n kube-system rollout restart daemonset/calico-node
 > ⚠️ 如果以后把节点加到了**别的子网**，就必须回头放行 IP 协议号 4（IPIP），
 > 或者改用 VXLAN（`vxlanMode: CrossSubnet` + 放行 UDP 4789 —— 这个端口好加得多）。
 
+## ⚠️ 加节点前必读：两个坑 + 一个硬结论
+
+### 坑一：**两台机器上都有本地 iptables 规则在拦 k8s 端口**
+
+这些实例的镜像/cloud-init 预置了一条"除 22/80/443 全拒绝"的规则：
+
+```
+-P INPUT ACCEPT
+-A INPUT -p tcp --dport 22 -j ACCEPT
+-A INPUT -p tcp --dport 80 -j ACCEPT      # 只有部分机器有
+-A INPUT -p tcp --dport 443 -j ACCEPT
+-A INPUT -j REJECT --reject-with icmp-host-prohibited   # ← 把上面没列的端口全挡了
+```
+
+**关键认知**：`-P INPUT ACCEPT`（默认策略是放行）看着很安全，但**这条 REJECT 排在前面**，
+等于把默认策略架空了。所以**只看默认策略会误判**。
+
+而且**必须两台都改**，方向是双向的：
+
+| 方向 | 用途 | 改哪台 |
+|---|---|---|
+| 新节点 → 控制面:6443 | kubeadm join、kubelet 上报 | 控制面的 INPUT |
+| 控制面 → 新节点:10250 | `kubectl logs/exec`、探针 | 新节点的 INPUT |
+| 双向 TCP 179 | Calico BGP 交换路由 | 两台的 INPUT 都要 |
+
+放行命令（只放 VCN 内网，不动那条 REJECT）：
+
+```bash
+for dp in 179 6443 10250 2379 2380; do
+  sudo iptables -I INPUT -s 10.0.0.0/16 -p tcp --dport $dp -j ACCEPT
+done
+sudo netfilter-persistent save     # 持久化，否则重启就没了
+```
+
+> ⚠️ 顺带一个教训：我们一开始以为是 **OCI 安全列表**的问题，
+> 让用户在控制台加规则，加完还是不通 —— 因为真正的拦截在**本机 iptables**。
+> **排查网络不通时，先看本机 iptables，再看云平台防火墙**。
+
+### 坑二：containerd 装完后必须 **restart**，不能只用 `enable --now`
+
+```bash
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y containerd.io
+sudo bash -c "containerd config default > /etc/containerd/config.toml"
+sudo sed -i "s/SystemdCgroup = false/SystemdCgroup = true/" /etc/containerd/config.toml
+sudo systemctl enable --now containerd    # ❌ 如果它已经在跑，这行是空操作
+sudo systemctl restart containerd         # ✅ 必须显式 restart 才会读新配置
+```
+
+**症状**：`kubeadm join` 报
+```
+[ERROR CRI]: could not connect to the container runtime:
+  unknown service runtime.v1.RuntimeService
+```
+这是 **CRI 插件没加载**的典型特征（配置没被读取，containerd 用的还是默认状态）。
+
+### ⭐ 硬结论：**1 GB / 1-8 OCPU 的 OCI Micro 撑不住 k8s worker**
+
+实测数据（Oracle E2.1.Micro，1 GB RAM + 1/8 OCPU，只有系统服务无额外负载）：
+
+| 指标 | 实测值 | 说明 |
+|---|---|---|
+| join 本身 | ✅ 成功 | 节点能注册、能变 Ready |
+| 稳定运行 | ❌ **24 分钟后仍 NotReady** | calico-node 永远起不来 |
+| load average | **38 ~ 42** | 正常应 < 2 |
+| 内存可用 | 137 MB | kubelet+containerd+calico+kube-proxy ≈ 340 MB |
+| **磁盘 IO 等待** | **56% ~ 69%** | 真正的瓶颈不是 CPU |
+| 持续块读 | **51 MB/s，24 分钟共 70+ GB** | 容器镜像解包在低 IOPS 引导卷上打转 |
+| `crictl images` | 超时无响应 | containerd 完全卡死 |
+| SSH | 握手超时 | 机器还在，但慢到无法交互 |
+
+**根因**：容器镜像解包是 **IOPS 密集型**操作，而 Micro 规格的引导卷 IOPS/吞吐极低
+（几百 IOPS 级别）。CPU 只有 1/8 OCPU 更是雪上加霜。**不是配置问题，是规格问题。**
+
+**官方最低要求是 2 CPU / 2 GB** —— 实测确认这个数字不是随便写的。
+
+**后果提醒**：那台 Micro 上还跑着 `x-ui`（用户的代理面板），
+被 k8s 组件饿死后代理也不通了。**在资源紧张的机器上做实验前，
+先确认上面有没有在跑别的服务。**
+
+**真要第二个节点，应该用**：本地虚拟机（内存够、磁盘快，可走 WireGuard 接入）、
+或一台 ≥2C/2G 的云主机。跨云接入还要额外处理 apiserver 暴露与网络封装，不划算。
+
 ## 控制面指标开放
 
 kubeadm 默认把 scheduler / controller-manager / etcd 的 metrics 只绑 `127.0.0.1`，
