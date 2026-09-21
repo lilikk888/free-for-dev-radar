@@ -26,7 +26,7 @@ spec:
             runAsUser: 10001
           containers:
             - name: collect
-              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-4babaf0
               imagePullPolicy: Always
               command: ["python", "-m", "app.cli", "collect"]
               env:
