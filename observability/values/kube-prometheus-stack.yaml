@@ -203,6 +203,17 @@ alertmanager:
               Subject: '[CRITICAL] {{ .GroupLabels.alertname }} ({{ .Alerts.Firing | len }} firing)'
 
   alertmanagerSpec:
+    # 让 Alertmanager 的 UI 能挂在 /alertmanager 子路径下访问，
+    # 配合 observability/manifests/alertmanager-ingress.yaml 使用。
+    # 不设这个的话，界面里的静态资源和 API 都指向根路径，通过反向代理会 404。
+    #
+    # ⚠️ 不要再设 externalUrl 为相对路径！Alertmanager v0.34 要求它必须是
+    #    带 http/https 协议的绝对 URL，写相对路径（如 "/alertmanager"）会让
+    #    Alertmanager 直接 CrashLoopBackOff：
+    #      failed to determine external URL: "/alertmanager":
+    #      invalid "" scheme, only 'http' and 'https' are supported
+    #    只设 routePrefix 已经足够让 Web UI 和 API 在子路径下正常工作。
+    routePrefix: /alertmanager
     # ⚠️ 这一行是必须的，踩过一次：
     # chart 的 `alertmanager.config` 会渲染进 secret
     # `alertmanager-<fullname>`，但**渲染出的 Alertmanager CR 里不带 configSecret 字段**，

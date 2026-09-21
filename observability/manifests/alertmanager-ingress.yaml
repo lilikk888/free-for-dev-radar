@@ -1,0 +1,29 @@
+---
+# Alertmanager 的 Web UI 暴露到 /alertmanager 子路径。
+#
+# 为什么需要：Alertmanager 的默认 Service 是集群内部的
+# `monitoring-kube-prometheus-alertmanager.monitoring:9093`，
+# 在浏览器里直接打开这个域名会 502 —— 因为它是集群内 DNS，
+# 从外网（哪怕走代理）解析不到。要走隧道必须经 Ingress。
+#
+# ⚠️ 子路径能工作依赖 Alertmanager 启动参数里的 routePrefix，
+#    在 observability/values/kube-prometheus-stack.yaml 的
+#    alertmanagerSpec.routePrefix 里设置（这里是 Prefix 前缀，不做 rewrite）。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: alertmanager
+  namespace: monitoring
+spec:
+  ingressClassName: nginx
+  rules:
+    # 不写 host：匹配任意域名（我们的隧道域名是随机的）
+    - http:
+        paths:
+          - path: /alertmanager
+            pathType: Prefix
+            backend:
+              service:
+                name: monitoring-kube-prometheus-alertmanager
+                port:
+                  number: 9093

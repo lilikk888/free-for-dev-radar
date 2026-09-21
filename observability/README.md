@@ -135,7 +135,7 @@ kubectl -n radar create job --from=cronjob/radar-collect manual-collect-$RANDOM
 > kube-prometheus-stack 的集群里 apply。所以它们刻意放在 `observability/` 而不是 `k8s/`：
 > `k8s/` 是应用本身（本地 kind 也能跑），这些是「平台如何接入应用」。
 
-## 四个必踩的坑
+## 五个必踩的坑
 
 ### 坑一：控制面指标默认抓不到（kubeadm 特有）
 
@@ -270,6 +270,39 @@ grafana:
 
 **教训**：前端报了「DOM 节点找不到」这类错，先怀疑浏览器插件（翻译 / 广告拦截）
 在改 DOM，再去查应用本身的 bug。
+
+### 坑五：Alertmanager 挂子路径时，`externalUrl` **不能写相对路径**
+
+想让 Alertmanager UI 通过反向代理访问，需要设 `routePrefix`：
+
+```yaml
+alertmanager:
+  alertmanagerSpec:
+    routePrefix: /alertmanager     # ✅ 只设这个就够
+    # externalUrl: /alertmanager   # ❌ 千万别这么写
+```
+
+**写相对路径会让 Alertmanager 直接 CrashLoopBackOff**（v0.34 实测）：
+
+```
+level=ERROR msg="alertmanager exited with error"
+  err="failed to determine external URL: \"/alertmanager\":
+       invalid \"\" scheme, only 'http' and 'https' are supported"
+```
+
+`externalUrl` 必须是**带 http/https 协议的绝对 URL**。这里既然我们的公网域名是
+Cloudflare 随机隧道域名（会变），索性**不设**，保留 operator 给的默认值即可 ——
+只靠 `routePrefix` 就能让 Web UI 和 API 在子路径下正常工作。
+
+**和 Grafana 的关键差异**：Grafana 挂了子路径后需要**手动**改
+`grafana.serviceMonitor.path`，否则 metrics 抓不到；
+而 Alertmanager 设了 `routePrefix` 之后 **prometheus-operator 会自动**
+把 ServiceMonitor 的 path 改成 `/alertmanager/metrics`，不用管。
+
+> 顺带记一个排错经验：用户浏览器里直接打开集群内 DNS
+> （`monitoring-kube-prometheus-alertmanager.monitoring:9093`）会得到 **502** ——
+> 那个域名只在集群内解析，走代理出去时代理解析不了就返回 502。
+> 不是服务挂了，是地址不对。要通过隧道访问，必须经 Ingress。
 
 ## 资源占用（2 OCPU / 12 GB 单节点实测）
 
