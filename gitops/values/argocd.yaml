@@ -27,16 +27,10 @@ configs:
 
 server:
   ingress:
-    enabled: true
-    ingressClassName: nginx
-    # ⚠️ 必须显式清空 hosts！
-    # chart 默认会塞一个 hosts: [argocd.example.com]，
-    # 那样 ingress-nginx 只会把带这个 Host 头的请求路由过来，
-    # 而我们的隧道域名是随机的 trycloudflare.com —— 页面会直接 404。
-    # 清空后生成的是「无 host 的 catch-all 规则」，配合 /argocd 路径前缀使用。
-    hosts: []
-    path: /argocd
-    pathType: Prefix
+    # ⚠️ 关掉 chart 自带的 ingress，用 gitops/manifests/argocd-ingress.yaml 代替。
+    # 原因：chart 模板对空 hosts 有 fallback，`hosts: []` 时它仍然渲染
+    # `host: argocd.example.com`，导致随机隧道域名访问 404。自己写更可控。
+    enabled: false
   resources:
     requests:
       cpu: 20m

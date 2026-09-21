@@ -1,0 +1,31 @@
+---
+# Argo CD UI 的 Ingress。
+#
+# 为什么不直接用 chart 自带的 `server.ingress`：
+# chart 的模板对空的 hosts 列表有 fallback —— `hosts: []` 时它仍然会渲染
+# `host: argocd.example.com`。那样 ingress-nginx 只接受带这个 Host 头的请求，
+# 而我们的公网域名是随机的 trycloudflare.com，页面会 404。
+#
+# 所以这里关掉 chart 的 ingress（server.ingress.enabled=false），自己写一条
+# **不带 host 的 catch-all 规则**，靠 /argocd 路径前缀和别的服务区分开。
+#
+# ⚠️ 子路径能工作依赖 argocd-server 启动参数里的 basehref/rootpath，
+#    那两个在 gitops/values/argocd.yaml 的 configs.params 里设。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server
+  namespace: argocd
+spec:
+  ingressClassName: nginx
+  rules:
+    # 刻意不写 host：匹配任意域名（catch-all）
+    - http:
+        paths:
+          - path: /argocd
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 80
