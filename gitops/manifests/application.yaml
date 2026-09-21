@@ -1,0 +1,53 @@
+---
+# Argo CD Application —— 声明「集群应该长成什么样」
+#
+# 这个文件本身就是 GitOps 的核心思想：
+#   集群状态不是「被推上去的」，而是「Argo CD 持续从 Git 拉取并对齐的结果」。
+#
+# 应用方式：
+#   kubectl apply -f gitops/manifests/application.yaml
+#
+# 注意：这个 Application **不需要仓库凭据** —— 仓库是公开的。
+# 私有仓库要另外配 repo secret。
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: radar
+  namespace: argocd
+  # 删除 Application 时级联删掉它管理的工作负载。
+  # 生产环境要谨慎：加了这个 finalizer，删 Application = 删业务。
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/lilikk888/free-for-dev-radar.git
+    targetRevision: main
+    # kustomize 目录（Argo CD 会自动识别 kustomization.yaml）
+    path: k8s
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: radar
+
+  syncPolicy:
+    automated:
+      # prune: 仓库里删掉的资源，集群里也删掉（否则会留下一堆孤儿资源）
+      prune: true
+      # selfHeal: 有人手动改了集群（kubectl edit / scale），Argo CD 自动纠回 Git 的状态。
+      # 这是 GitOps 最直观的价值演示，但也意味着「临时手动改一下」会失效。
+      selfHeal: true
+    syncOptions:
+      # namespace 由 k8s/namespace.yaml 创建，不需要 Argo 代劳
+      - CreateNamespace=false
+      # 只 apply 有差异的资源，减少无谓的 API 调用
+      - ApplyOutOfSyncOnly=true
+      # 让 Argo CD 用 server-side apply 的语义处理字段冲突
+      - ServerSideApply=false
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

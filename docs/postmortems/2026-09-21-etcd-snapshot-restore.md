@@ -178,7 +178,70 @@ Normal   LeaderElection  lease/kube-controller-manager
 > （kubelet 继续维持已有容器）。控制面不可用影响的是「新的调度和状态变更」，
 > 不是「已运行的负载」——这是理解 K8s 控制面与数据面分离的一个具体例子。
 
-## 5. 演练中暴露的真实事故：CI 部署失败
+## 5. 演练的**长期副作用**：组件 informer 缓存陈旧
+
+恢复当天集群看起来一切正常，但事后发现一条 warning 告警 `PrometheusDuplicateTimestamps`
+**持续 firing 了好几个小时**。追下去发现根因就是这次恢复。
+
+### 现象
+
+```
+Prometheus 日志:
+  level=WARN msg="Error on ingesting samples with different value but same timestamp"
+  scrape_pool=serviceMonitor/monitoring/monitoring-kube-state-metrics/0
+  target=http://192.168.48.39:8080/metrics
+  num_dropped=1                      ← 每个抓取周期丢 1 个，精确等于抓取频率
+```
+
+直接抓 kube-state-metrics 的 `/metrics` 并检查重复序列，锁定到**唯一一个指标**：
+
+```
+kube_lease_renew_time{lease="apiserver-dzuks5w2ta4qtoujx2qlfdxxyy",namespace="kube-system"}
+   第一次: 1.789969962e+09
+   第二次: 1.789925644e+09          ← 相差 44318 秒 ≈ 12.3 小时（陈旧值）
+```
+
+`kube_lease_owner` 更是直接暴露了问题 —— **同一个 lease 有两个不同的 holder**：
+
+```
+kube_lease_owner{lease="apiserver-dzuks...", lease_holder="...d90138ea-90a2-..."} 1
+kube_lease_owner{lease="apiserver-dzuks...", lease_holder="...b89ced07-789c-..."} 1
+```
+
+### 根因
+
+| 时间 | 事件 |
+|---|---|
+| 17:11:43 | kube-state-metrics 启动，**建立 informer 缓存**（此时 lease holder = `b89ced07`）|
+| 17:34:36 | etcd 从快照恢复 → apiserver 以**新身份** `d90138ea` 重建同名 lease（**uid 也变了**）|
+| — | KSM 的本地缓存里，恢复前那个**旧对象没有被清掉**，于是同名两个对象同时存在 |
+| — | 两个对象 → 同名两个样本 → Prometheus 每周期丢弃 1 个 → 告警持续 firing |
+
+**关键机制**：`etcdctl snapshot restore` 会把整个 etcd 状态替换成快照时刻的内容。
+任何**依赖 watch/informer 缓存**的组件（kube-state-metrics、各种 operator、controller）
+在恢复后都可能持有「快照里已经没有的」旧对象。恢复后**必须重启这类组件重建缓存**。
+
+### 修复
+
+```bash
+kubectl -n monitoring rollout restart deploy/monitoring-kube-state-metrics
+```
+
+重启后重复序列数从 1 变成 **0**，告警随 `rate(...[5m])` 窗口滚出后自行收敛。
+
+### 教训
+
+> **etcd 恢复到「集群能用」只是第一步。**
+> 恢复后应该主动做一次「缓存一致性巡检」：重启所有依赖 informer 的组件
+> （kube-state-metrics、各 operator、Ingress controller 等），
+> 并盯一段时间看有没有持续性的异常告警。
+>
+> 这次是靠一条看起来无关的 warning 告警暴露出来的 —— 如果当时把它当噪音忽略掉，
+> 这个不一致可能一直留在缓存里。
+
+**新增 Action Item**：AI-15（见下一节表格）—— 在 etcd 恢复 SOP 里加一步「重启依赖 informer 的组件」。
+
+## 6. 演练中暴露的真实事故：CI 部署失败
 
 **这是个意外收获，而且是我自己的操作失误造成的。**
 
@@ -202,7 +265,7 @@ Normal   LeaderElection  lease/kube-controller-manager
 
 **改进项**（见下一节 AI-3）。
 
-## 6. Action Items
+## 7. Action Items
 
 | 编号 | 改进项 | 优先级 | 状态 |
 |---|---|---|---|
@@ -212,8 +275,10 @@ Normal   LeaderElection  lease/kube-controller-manager
 | AI-4 | 建一份「控制面维护窗口」checklist：先确认无流水线在跑、再动手 | 中 | 待办 |
 | AI-5 | 加一条 `kube_pod_container_status_restarts_total` 突增的告警，覆盖静态 Pod 意外重启 | 低 | 待办 |
 | AI-6 | 演练等等间隔重复（建议每季度），并把耗时记录进本文件 | 低 | 待办 |
+| **AI-15** | **在 etcd 恢复 SOP 里加一步「重启依赖 informer 缓存的组件」**（本次踩到，见第 5 节）| **高** | 待办 |
+| AI-16 | 把「排查指标重复样本」的方法沉淀成技能 | 中 | ✅ 已写进 `kubeadm-bare-metal-cluster` |
 
-## 7. 可复用 SOP（浓缩版）
+## 8. 可复用 SOP（浓缩版）
 
 ```bash
 # ===== 备份 =====

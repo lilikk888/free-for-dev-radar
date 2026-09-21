@@ -1,6 +1,12 @@
 ---
 # 用 kustomize（kubectl 内置）统一改镜像地址和 tag，
 # 避免把 tag 硬编码进 deployment.yaml。
+#
+# ⚠️ 这里是 GitOps 的「单一可信来源」：
+# Argo CD 直接读仓库这个文件的状态去同步集群。
+# CI 构建完镜像后会把 newTag 改成新的 sha-<commit> 并提交回仓库，
+# 提交一进来 Argo CD 就自动同步 —— 这就是 GitOps 的闭环。
+# （旧的流程是 CI 里 ssh 过去 kubectl apply，那个需要给 CI 集群凭据）
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -13,6 +19,7 @@ resources:
   - cronjob.yaml
 
 images:
-  - name: ghcr.io/owner/free-for-dev-radar
-    newName: ghcr.io/owner/free-for-dev-radar
-    newTag: latest
+  - name: ghcr.io/lilikk888/free-for-dev-radar
+    newName: ghcr.io/lilikk888/free-for-dev-radar
+    # 由 CI 自动回写，不要手改
+    newTag: sha-862c516

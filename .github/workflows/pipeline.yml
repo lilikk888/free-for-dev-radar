@@ -71,12 +71,14 @@ jobs:
         run: echo "已推送：${{ steps.meta.outputs.tags }}"
 
   deploy:
-    name: 部署到 Kubernetes
+    name: 提交镜像 tag 到 Git（Argo CD 自动同步）
     needs: build
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # GitOps 模式：CI 不再直接改集群，而是把新镜像 tag 提交回仓库。
+      # 所以这里要写权限，但**不再需要集群的写权限**。
+      contents: write
       packages: read
     concurrency:
       group: deploy-radar
@@ -130,26 +132,62 @@ jobs:
             exit 1
           fi
 
-      - name: 渲染清单并 apply
+      - name: 回写镜像 tag 到仓库
+        run: |
+          TAG="sha-$(echo "$GITHUB_SHA" | cut -c1-7)"
+          echo "新镜像 tag：$TAG"
+
+          if grep -q "newTag: $TAG" k8s/kustomization.yaml; then
+            echo "仓库里已经是 $TAG，无需提交"
+            exit 0
+          fi
+
+          # kustomization 是权威来源；deployment/cronjob 里的字面量也一起改，
+          # 这样即使有人直接 kubectl apply 单个文件也不会拿到旧镜像
+          sed -i "s|newTag:.*|newTag: $TAG|" k8s/kustomization.yaml
+          sed -i "s|\(ghcr.io/lilikk888/free-for-dev-radar:\)[^[:space:]]*|\1$TAG|g" \
+            k8s/deployment.yaml k8s/cronjob.yaml
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add k8s/
+          # ⚠️ [skip ci] 必须有：否则这次回写提交会再触发一轮流水线，形成无限循环
+          git commit -m "chore(deploy): bump image to $TAG [skip ci]"
+          git push
+          echo "已提交，Argo CD 会在下一轮 reconciliation 时同步"
+
+      - name: 等待 Argo CD 同步并滚动更新完成
         env:
           K3S_HOST: ${{ secrets.K3S_HOST }}
           K3S_USER: ${{ secrets.K3S_USER }}
         run: |
           TAG="sha-$(echo "$GITHUB_SHA" | cut -c1-7)"
-          echo "部署 tag：$TAG"
-          sed -i "s|ghcr.io/owner/free-for-dev-radar|${{ env.IMAGE }}|g" \
-            k8s/kustomization.yaml k8s/deployment.yaml k8s/cronjob.yaml
-          sed -i "s|newTag:.*|newTag: $TAG|" k8s/kustomization.yaml
-          kubectl kustomize k8s/ | ssh -i ~/.ssh/id_ed25519 \
-            "$K3S_USER@$K3S_HOST" \
-            "kubectl apply -f -"
+          LIVE=""
+          # Argo CD 默认 3 分钟轮询一次；本项目把 timeout.reconciliation 调成了 60s。
+          # 这里等最多 10 分钟，足够「轮询发现变化 + 滚动更新」走完
+          for i in $(seq 1 40); do
+            LIVE=$(ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes -o ConnectTimeout=10 \
+                     "$K3S_USER@$K3S_HOST" \
+                     "kubectl -n radar get deploy radar -o jsonpath='{.spec.template.spec.containers[0].image}'" \
+                   2>/dev/null || true)
+            echo "[$i/40] 集群当前镜像: ${LIVE:-<读取失败>}"
+            case "$LIVE" in
+              *"$TAG") echo "✅ Argo CD 已同步到 $TAG"; break ;;
+            esac
+            sleep 15
+          done
 
-      - name: 等待滚动更新结束
-        env:
-          K3S_HOST: ${{ secrets.K3S_HOST }}
-          K3S_USER: ${{ secrets.K3S_USER }}
-        run: |
-          ssh -i ~/.ssh/id_ed25519 \
+          case "$LIVE" in
+            *"$TAG") ;;
+            *)
+              echo "::error::超时：Argo CD 未在预期时间内同步到 $TAG"
+              echo "::error::排查：kubectl -n argocd get application radar -o jsonpath='{.status.sync.status}'"
+              echo "::error::      kubectl -n argocd get application radar -o jsonpath='{.status.conditions}'"
+              exit 1
+              ;;
+          esac
+
+          ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes \
             "$K3S_USER@$K3S_HOST" \
             "kubectl -n radar rollout status deployment/radar --timeout=180s"
 

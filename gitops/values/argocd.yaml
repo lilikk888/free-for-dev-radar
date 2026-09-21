@@ -1,0 +1,89 @@
+---
+# Argo CD —— 把「CI 里 ssh + kubectl apply」换成 GitOps
+#
+# 核心变化：
+#   旧：CI 拿着集群凭据直接改集群（CI 是「能改生产的人」）
+#   新：CI 只负责构建镜像 + **把新 tag 提交回仓库**；集群状态由 Argo CD 从 Git 同步
+#       （CI 不再需要集群凭据，Git 成为单一可信来源）
+#
+# 安装：
+#   helm repo add argo https://argoproj.github.io/argo-helm
+#   helm install argocd argo/argo-cd -n argocd --create-namespace \
+#     --version <见 helm search repo> -f gitops/values/argocd.yaml
+
+# Argo CD 挂在 /argocd 子路径下（应用占了 catch-all 的 /，grafana 占了 /grafana）
+# 子路径部署必须同时设 basehref 和 rootpath，只设一个会出现静态资源 404
+configs:
+  params:
+    # argocd-server 用明文 HTTP，这样 ingress 不需要处理 TLS 回源（后端协议就简单了）
+    server.insecure: true
+    server.basehref: /argocd
+    server.rootpath: /argocd
+  cm:
+    # 默认 3 分钟轮询一次 Git。调到 60s 让「提交 -> 同步」的反馈快一些，
+    # 代价是多一点 Git 请求（公开仓库没有速率成本）。
+    # CI 里等同步完成的超时是按这个值算的。
+    timeout.reconciliation: 60s
+
+server:
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    # ⚠️ 必须显式清空 hosts！
+    # chart 默认会塞一个 hosts: [argocd.example.com]，
+    # 那样 ingress-nginx 只会把带这个 Host 头的请求路由过来，
+    # 而我们的隧道域名是随机的 trycloudflare.com —— 页面会直接 404。
+    # 清空后生成的是「无 host 的 catch-all 规则」，配合 /argocd 路径前缀使用。
+    hosts: []
+    path: /argocd
+    pathType: Prefix
+  resources:
+    requests:
+      cpu: 20m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+controller:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      memory: 768Mi
+
+repoServer:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+applicationSet:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+redis:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+# 单节点实验环境：关掉用不上的组件，省内存
+dex:
+  enabled: false          # 不接 SSO
+notifications:
+  enabled: false          # 不用 Argo CD 自己的通知（告警走 Alertmanager）
+
+# 只有一个节点，关掉反亲和 / 拓扑分散
+global:
+  affinity: {}
+  nodeSelector:
+    kubernetes.io/os: linux

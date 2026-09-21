@@ -101,7 +101,96 @@ prometheus:
 
 # ---------- Alertmanager ----------
 alertmanager:
+  # ------------------------------------------------------------------
+  # Alertmanager 配置
+  #
+  # 设计原则：**告警要少而准，否则会被无视**。
+  #   - 只有 severity=critical 才真正打扰人
+  #   - warning 只记进 Alertmanager，不推送（需要时自己去查）
+  #   - 用 inhibition 把「一个根因引发的几十条派生告警」压成一条
+  #
+  # ⚠️ 下面带 REPLACE_ME 的 SMTP 是占位值，填上真实凭据后告警才会真正发邮件。
+  #    在填之前：路由规则是生效的（可以用 API 验证），只是发信会失败。
+  # ------------------------------------------------------------------
+  config:
+    global:
+      resolve_timeout: 5m
+      # 以 QQ 邮箱为例（最省事，用「授权码」而不是登录密码）
+      # 换成别的邮箱就改这三行
+      smtp_smarthost: "smtp.qq.com:465"
+      smtp_from: "REPLACE_ME@qq.com"
+      smtp_auth_username: "REPLACE_ME@qq.com"
+      smtp_auth_password: "REPLACE_ME"
+      smtp_require_tls: true
+
+    route:
+      # 默认什么都不发 —— 没配 severity 的告警（比如 chart 自带的）
+      # 全部走 null，避免污染收件箱
+      receiver: "null"
+      group_by: ["alertname", "namespace"]
+      group_wait: 30s          # 攒 30 秒再发，让同一批告警合并成一条
+      group_interval: 5m       # 同一组的后续变化最多 5 分钟一次
+      repeat_interval: 4h      # 没解决的告警最多 4 小时提醒一次
+
+      routes:
+        # critical：立刻通知（group_wait 缩短，2 小时提醒一次）
+        - matchers:
+            - severity = "critical"
+          receiver: "email-critical"
+          group_wait: 10s
+          repeat_interval: 2h
+
+        # warning：只记录不打扰
+        - matchers:
+            - severity = "warning"
+          receiver: "null"
+          repeat_interval: 12h
+
+    inhibit_rules:
+      # 1) critical 抑制同名 warning —— 同一个问题不要报两个级别
+      - source_matchers:
+          - severity = "critical"
+        target_matchers:
+          - severity = "warning"
+        equal: ["alertname", "namespace"]
+
+      # 2) 目标抓不到了，就别再报这个目标的业务告警
+      #    （数据都没了，报「条目数骤降」纯属噪音）
+      - source_matchers:
+          - alertname = "RadarTargetDown"
+        target_matchers:
+          - alertname =~ "Radar(EntriesDropped|HttpErrorRate|CollectSlow)"
+        equal: ["namespace"]
+
+      # 3) 节点不可用时，抑制该节点上派生出来的一堆告警
+      #    （一个节点挂了能炸出几十条，这是最常见的告警风暴场景）
+      - source_matchers:
+          - alertname =~ "NodeNotReady|KubeNodeNotReady"
+        target_matchers:
+          - alertname =~ "Kube.*|Radar.*"
+        equal: ["node"]
+
+    receivers:
+      # 只记录，不发送任何东西。Alertmanager UI/API 里仍然能看到它
+      - name: "null"
+
+      # 真正会发信的 receiver
+      - name: "email-critical"
+        email_configs:
+          - to: "REPLACE_ME@qq.com"
+            send_resolved: true          # 恢复了也发一封，不然不知道什么时候好的
+            headers:
+              Subject: '[CRITICAL] {{ .GroupLabels.alertname }} ({{ .Alerts.Firing | len }} firing)'
+
   alertmanagerSpec:
+    # ⚠️ 这一行是必须的，踩过一次：
+    # chart 的 `alertmanager.config` 会渲染进 secret
+    # `alertmanager-<fullname>`，但**渲染出的 Alertmanager CR 里不带 configSecret 字段**，
+    # 于是 prometheus-operator 用它自己生成的 `-generated` 默认配置，
+    # 我们在 values 里写的路由/抑制规则被**彻底忽略**（而且不报任何错）。
+    # 现象：改完配置 upgrade 成功、pod 重启了，但 /api/v2/status 里的 config 还是默认那套。
+    configSecret: alertmanager-monitoring-kube-prometheus-alertmanager
+
     storage:
       volumeClaimTemplate:
         spec:
