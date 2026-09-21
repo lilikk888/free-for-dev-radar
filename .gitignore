@@ -11,3 +11,9 @@ data/
 .idea/
 .vscode/
 .DS_Store
+
+# 本地覆盖用的 Helm values —— 里面放真实凭据（SMTP 授权码等）。
+# 仓库里的 *.yaml 只留占位符，真实值通过
+#   helm upgrade ... -f <base>.yaml -f <base>.local.yaml
+# 传进去，这样凭据永远不会进版本库。
+*.local.yaml

@@ -115,13 +115,33 @@ alertmanager:
   config:
     global:
       resolve_timeout: 5m
-      # 以 QQ 邮箱为例（最省事，用「授权码」而不是登录密码）
-      # 换成别的邮箱就改这三行
-      smtp_smarthost: "smtp.qq.com:465"
-      smtp_from: "REPLACE_ME@qq.com"
-      smtp_auth_username: "REPLACE_ME@qq.com"
+
+      # ------------------------------------------------------------------
+      # 邮件通知（以 163 邮箱为例）
+      #
+      # ⚠️ 这个文件在公开仓库里，**绝不能写真实凭据**。
+      #    真实值放在同目录的 kube-prometheus-stack.local.yaml（已被 .gitignore 忽略），
+      #    安装时两个文件一起传：
+      #      helm upgrade monitoring prometheus-community/kube-prometheus-stack \
+      #        -n monitoring --version 91.4.1 \
+      #        -f observability/values/kube-prometheus-stack.yaml \
+      #        -f observability/values/kube-prometheus-stack.local.yaml
+      #
+      # 163 的 SMTP 参数和 QQ 有两处不同，容易踩：
+      #   1. 必须 smtp_require_tls: false —— 465 端口本身就是隐式 TLS，
+      #      再要求 STARTTLS 会握手失败
+      #   2. 建议 smtp_hello: "163.com" —— 部分反垃圾网关会校验 HELO 域
+      #
+      # 163 SMTP 端口实测（从东京这台机器）：
+      #   465/994/587 通，25 不通（OCI 默认封禁出站 25，正常现象）
+      # ------------------------------------------------------------------
+      smtp_smarthost: "smtp.163.com:465"
+      smtp_from: "REPLACE_ME@163.com"
+      smtp_auth_username: "REPLACE_ME@163.com"
+      # 邮箱后台生成的「授权码」，不是登录密码
       smtp_auth_password: "REPLACE_ME"
-      smtp_require_tls: true
+      smtp_require_tls: false
+      smtp_hello: "163.com"
 
     route:
       # 默认什么都不发 —— 没配 severity 的告警（比如 chart 自带的）
@@ -177,7 +197,7 @@ alertmanager:
       # 真正会发信的 receiver
       - name: "email-critical"
         email_configs:
-          - to: "REPLACE_ME@qq.com"
+          - to: "REPLACE_ME@163.com"
             send_resolved: true          # 恢复了也发一封，不然不知道什么时候好的
             headers:
               Subject: '[CRITICAL] {{ .GroupLabels.alertname }} ({{ .Alerts.Firing | len }} firing)'
