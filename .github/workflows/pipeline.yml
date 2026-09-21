@@ -110,6 +110,26 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "$K3S_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
+      - name: 检查集群 API 可达
+        env:
+          K3S_HOST: ${{ secrets.K3S_HOST }}
+          K3S_USER: ${{ secrets.K3S_USER }}
+        run: |
+          # 前置探活，把「集群不可用」和「清单写错了」这两类失败区分开。
+          # 没有这一步时，控制面不可达会吐 8 行 connection refused，
+          # 看不出是集群在维护、节点宕机、还是自己的 YAML 有问题。
+          if ssh -i ~/.ssh/id_ed25519 -o ConnectTimeout=10 -o BatchMode=yes \
+               "$K3S_USER@$K3S_HOST" \
+               "kubectl get --raw /readyz" > /tmp/readyz.out 2>&1; then
+            echo "集群 API 可达: $(cat /tmp/readyz.out)"
+          else
+            echo "::error::集群 API 不可达（$K3S_HOST）"
+            echo "::error::探活输出: $(cat /tmp/readyz.out)"
+            echo "::error::常见原因：控制面正在维护（例如做 etcd 恢复演练 / 证书续期）、节点宕机、网络不通。"
+            echo "::error::请先确认集群已恢复，再重跑本工作流 —— 不要盲目重试，那会掩盖真正的问题。"
+            exit 1
+          fi
+
       - name: 渲染清单并 apply
         env:
           K3S_HOST: ${{ secrets.K3S_HOST }}

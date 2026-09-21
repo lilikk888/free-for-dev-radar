@@ -208,7 +208,7 @@ Normal   LeaderElection  lease/kube-controller-manager
 |---|---|---|---|
 | AI-1 | 把 etcd 备份脚本化 + 加定时任务（当前只是一次性手动备份） | 高 | 待办 |
 | AI-2 | 备份文件异机留存（现在和 etcd 同盘，机器挂了备份一起没） | 高 | 待办 |
-| AI-3 | 给 CI 的部署步骤加**前置可达性检查**，失败时输出人话而不是一堆 `connection refused` | 中 | 待办 |
+| AI-3 | 给 CI 的部署步骤加**前置可达性检查**，失败时输出人话而不是一堆 `connection refused` | 中 | ✅ **已完成**（`检查集群 API 可达` 步骤，探活 `/readyz`）|
 | AI-4 | 建一份「控制面维护窗口」checklist：先确认无流水线在跑、再动手 | 中 | 待办 |
 | AI-5 | 加一条 `kube_pod_container_status_restarts_total` 突增的告警，覆盖静态 Pod 意外重启 | 低 | 待办 |
 | AI-6 | 演练等等间隔重复（建议每季度），并把耗时记录进本文件 | 低 | 待办 |
