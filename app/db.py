@@ -61,6 +61,29 @@ CREATE TABLE IF NOT EXISTS mine (
 
 CREATE INDEX IF NOT EXISTS idx_mine_expires_at ON mine(expires_at);
 CREATE INDEX IF NOT EXISTS idx_mine_status ON mine(status);
+
+-- 链接巡检结果。
+-- 为什么需要：免费服务会关停、官网会改版，清单里的链接会悄悄失效。
+-- 与其等用户点进去发现 404，不如定时自己巡一遍。
+-- 每次巡检**追加**一行（不是覆盖），这样能看出「某条链接是从哪天开始挂的」。
+CREATE TABLE IF NOT EXISTS link_checks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id    TEXT    NOT NULL,
+    checked_at  TEXT    NOT NULL,
+    ok          INTEGER NOT NULL,
+    status_code INTEGER,
+    error       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_link_checks_entry ON link_checks(entry_id, id DESC);
+
+-- 「见过哪些精选条目」，用于每周订阅邮件算出「本周新收录」。
+-- 每次跑巡检/采集时把当前精选 id 全量 upsert 进去，first_seen 只写一次。
+CREATE TABLE IF NOT EXISTS seen_entries (
+    entry_id   TEXT PRIMARY KEY,
+    first_seen TEXT NOT NULL,
+    last_seen  TEXT NOT NULL
+);
 """
 
 

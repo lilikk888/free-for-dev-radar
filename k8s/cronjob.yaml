@@ -26,7 +26,7 @@ spec:
             runAsUser: 10001
           containers:
             - name: collect
-              image: ghcr.io/lilikk888/free-for-dev-radar:sha-f0679fa
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
               imagePullPolicy: Always
               command: ["python", "-m", "app.cli", "collect"]
               env:
@@ -46,6 +46,122 @@ spec:
                   memory: 64Mi
                 limits:
                   cpu: 300m
+                  memory: 192Mi
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: radar-data
+---
+# 每天巡检一次精选条目的官网链接，顺便同步「见过哪些条目」。
+#
+# 为什么是每天而不是每周：链接失效要尽早发现 —— 用户点进去 404 一次，
+# 就再也不信这个工具了。88 条链接并发 8 个线程，几十秒跑完，成本可以忽略。
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: radar-check-links
+  namespace: radar
+spec:
+  schedule: "23 4 * * *"
+  timeZone: Asia/Shanghai
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: radar-check-links
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+          containers:
+            - name: check-links
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
+              imagePullPolicy: Always
+              command: ["python", "-m", "app.cli", "check-links"]
+              env:
+                - name: RADAR_DB_PATH
+                  value: /data/radar.db
+                - name: RADAR_PUSHGATEWAY_URL
+                  value: http://pushgateway.monitoring.svc.cluster.local:9091
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
+                limits:
+                  cpu: 300m
+                  memory: 256Mi
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: radar-data
+---
+# 每周一早上发一封周报：本周新收录 / 快过期的额度 / 链接挂了的条目。
+#
+# ⚠️ 凭据处理：SMTP 用户名和授权码放在 Secret `radar-smtp` 里，**不进 Git**。
+#    创建方式（从 Alertmanager 已有的 163 配置抄一份，避免重复维护凭据）：
+#      kubectl -n radar create secret generic radar-smtp \
+#        --from-literal=RADAR_SMTP_HOST=smtp.163.com \
+#        --from-literal=RADAR_SMTP_PORT=465 \
+#        --from-literal=RADAR_SMTP_USER=<你的邮箱> \
+#        --from-literal=RADAR_SMTP_PASS=<授权码> \
+#        --from-literal=RADAR_SMTP_FROM=<你的邮箱> \
+#        --from-literal=RADAR_DIGEST_TO=<收件邮箱>
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: radar-digest
+  namespace: radar
+spec:
+  schedule: "0 9 * * 1"
+  timeZone: Asia/Shanghai
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: radar-digest
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+          containers:
+            - name: digest
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
+              imagePullPolicy: Always
+              command: ["python", "-m", "app.cli", "digest"]
+              env:
+                - name: RADAR_DB_PATH
+                  value: /data/radar.db
+              envFrom:
+                # 可选：没建这个 Secret 时 Pod 起不来，所以用 optional
+                - secretRef:
+                    name: radar-smtp
+                    optional: true
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
                   memory: 192Mi
           volumes:
             - name: data

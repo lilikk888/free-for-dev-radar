@@ -195,6 +195,41 @@ class CreditsCollector:
 WEB_REGISTRY.register(CreditsCollector())
 
 
+class LinkCollector:
+    """把「链接巡检结果」暴露成指标，供 Grafana / 告警使用。
+
+    巡检是 CronJob 干的（短命进程），结果落在 SQLite；
+    Web 进程每次被抓取时现查最近一次结果，所以指标永远反映最新巡检。
+    """
+
+    def collect(self) -> Iterator[GaugeMetricFamily]:
+        try:
+            from . import linkcheck
+
+            latest = linkcheck.latest()
+        except Exception:  # pragma: no cover
+            return
+        if not latest:
+            return
+
+        ok_family = GaugeMetricFamily(
+            "radar_link_ok", "该条目官网最近一次巡检是否可达（1/0）", labels=["entry_id"]
+        )
+        dead = 0
+        for entry_id, v in latest.items():
+            ok_family.add_metric([entry_id], 1 if v["ok"] else 0)
+            if not v["ok"]:
+                dead += 1
+        yield ok_family
+
+        dead_family = GaugeMetricFamily("radar_links_dead", "最近一次巡检发现不可达的链接数")
+        dead_family.add_metric([], dead)
+        yield dead_family
+
+
+WEB_REGISTRY.register(LinkCollector())
+
+
 def render_web_metrics() -> tuple[bytes, str]:
     return generate_latest(WEB_REGISTRY), CONTENT_TYPE_LATEST
 
@@ -222,6 +257,17 @@ COLLECT_SUCCESS = Gauge(
     "最近一次采集是否成功（1 成功 / 0 失败）",
     registry=JOB_REGISTRY,
 )
+LINK_CHECKED = Gauge(
+    "radar_linkcheck_total", "最近一次巡检检查了多少条链接", registry=JOB_REGISTRY
+)
+LINK_DEAD = Gauge(
+    "radar_linkcheck_dead", "最近一次巡检发现多少条链接不可达", registry=JOB_REGISTRY
+)
+
+
+def record_linkcheck(total: int, dead: int) -> None:
+    LINK_CHECKED.set(total)
+    LINK_DEAD.set(dead)
 
 
 def record_collect(

@@ -197,6 +197,7 @@ function cardHTML(e){
         ${e.expiry ? `<span class="tag">${esc(e.expiry)}</span>` : ""}</h3>
     <div class="sum">${esc(e.summary)}</div>
     ${e.quota ? `<div class="kv"><b>免费额度：</b>${esc(e.quota)}</div>` : ""}
+    ${e.link_ok === false ? `<div class="tips">⚠️ 官网链接最近一次巡检打不开（${esc(e.link_error || "无法访问")}）—— 可能已经停服，注册前先自己确认一下。</div>` : ""}
     <div class="tags">${tagHTML}</div>
     ${e.tips ? `<div class="tips">注意：${esc(e.tips)}</div>` : ""}
     ${e.url ? `<a class="go" href="${esc(e.url)}" target="_blank" rel="noopener">打开官网 →</a>` : ""}

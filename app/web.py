@@ -90,13 +90,25 @@ def api_search(
 ) -> dict[str, Any]:
     """核心接口：把中文需求翻译成检索条件，返回精选 + 收录两层结果。"""
     tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()]
-    return search_mod.search(
+    result = search_mod.search(
         query=q,
         cat=cat,
         tags=tag_list,
         foreign_rows=_foreign_rows(),
         limit=limit,
     )
+    # 把最近一次链接巡检结果并进结果里，页面上能给「官网挂了」的条目打标记
+    try:
+        from . import linkcheck
+
+        latest = linkcheck.latest()
+        for item in result["curated"]:
+            v = latest.get(item["id"])
+            item["link_ok"] = None if v is None else bool(v["ok"])
+            item["link_error"] = (v or {}).get("error")
+    except Exception:  # pragma: no cover - 巡检还没跑过时不影响搜索
+        pass
+    return result
 
 
 @app.get("/api/categories")
@@ -155,6 +167,16 @@ def api_mine_expiring(days: int = Query(14, ge=1, le=365)) -> dict[str, Any]:
     """即将到期（含已过期）的额度 —— 邮件提醒看的就是这份数据。"""
     items = userdata.expiring(within_days=days)
     return {"days": days, "count": len(items), "items": items}
+
+
+@app.get("/api/links")
+def api_links(only_dead: bool = Query(False, description="只看不可达的")) -> dict[str, Any]:
+    """链接巡检结果（页面上的「链接可能失效」标记就读这个）。"""
+    from . import linkcheck
+
+    latest = linkcheck.latest()
+    items = [v for v in latest.values() if (not only_dead or not v["ok"])]
+    return {"stats": linkcheck.stats(), "items": items}
 
 
 @app.get("/api/curated")
