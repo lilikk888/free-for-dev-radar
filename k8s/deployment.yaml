@@ -24,7 +24,7 @@ spec:
         runAsUser: 10001
       containers:
         - name: radar
-          image: ghcr.io/lilikk888/free-for-dev-radar:sha-f0679fa
+          image: ghcr.io/lilikk888/free-for-dev-radar:sha-86d6ba6
           imagePullPolicy: Always
           ports:
             - name: http
