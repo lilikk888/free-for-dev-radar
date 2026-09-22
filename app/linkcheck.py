@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -28,28 +29,58 @@ from . import db
 USER_AGENT = "free-for-dev-radar-linkcheck/1.0 (+https://github.com/lilikk888/free-for-dev-radar)"
 TIMEOUT = 15
 WORKERS = 8
-# 这些状态码不算"挂了"：站点在，只是拒绝自动访问
-TOLERATED = {401, 403, 405, 429}
+
+# ⭐ 判定规则：**「站点还在」和「能自动打开」是两件事**。
+# 第一次跑真实巡检时踩到：
+#   - Mistral 返回 307（重定向）被当成挂了
+#   - 华为云返回 418（反爬的玩笑码）被当成挂了
+# 这些站点对用户都是好的。所以规则改成：
+#   2xx / 3xx                    → 正常
+#   401 / 403 / 405 / 418 / 429  → 正常（站点在，只是拒绝自动访问）
+#   404 / 410 / 5xx / 网络异常    → 判定为不可达（真的可能停服了）
+REACHABLE_ANYWAY = {401, 403, 405, 418, 429}
+GONE = {404, 410, 451}
+
+
+def _classify(status: int) -> bool:
+    if 200 <= status < 400:
+        return True
+    if status in REACHABLE_ANYWAY:
+        return True
+    return False
 
 
 def _probe(url: str) -> tuple[bool, int | None, str | None]:
-    """探测单个 URL。返回 (是否正常, 状态码, 错误信息)。"""
-    for method in ("HEAD", "GET"):
-        req = urllib.request.Request(url, method=method, headers={"User-Agent": USER_AGENT})
-        try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-                return True, resp.status, None
-        except urllib.error.HTTPError as exc:
-            if exc.code in TOLERATED:
-                return True, exc.code, f"HTTP {exc.code}（站点可达，拒绝自动访问）"
-            if method == "HEAD" and exc.code in (400, 404, 500, 501, 503):
-                continue  # HEAD 不被支持，换 GET 再试
-            return False, exc.code, f"HTTP {exc.code}"
-        except Exception as exc:  # 超时、DNS 失败、证书错误…
-            if method == "HEAD":
-                continue
-            return False, None, f"{type(exc).__name__}: {exc}"[:200]
-    return False, None, "HEAD 与 GET 都失败"
+    """探测单个 URL。返回 (是否正常, 状态码, 错误信息)。
+
+    网络层面的失败（超时/SSL/连接重置）会**重试一次** ——
+    跨云跨境的网络抖动很常见，一次失败就判死会产生大量误报。
+    """
+    last_error: str | None = None
+
+    for attempt in range(2):
+        for method in ("HEAD", "GET"):
+            req = urllib.request.Request(url, method=method, headers={"User-Agent": USER_AGENT})
+            try:
+                with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                    return True, resp.status, None
+            except urllib.error.HTTPError as exc:
+                if _classify(exc.code):
+                    note = f"HTTP {exc.code}（站点可达，拒绝或重定向自动访问）"
+                    return True, exc.code, note
+                if exc.code in GONE:
+                    return False, exc.code, f"HTTP {exc.code}（页面不存在）"
+                if method == "HEAD":
+                    continue  # 有些站点不支持 HEAD，换 GET
+                return False, exc.code, f"HTTP {exc.code}"
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {exc}"[:200]
+                if method == "HEAD":
+                    continue
+        # 网络层失败：等一秒重试一次
+        time.sleep(1)
+
+    return False, None, last_error or "HEAD 与 GET 都失败"
 
 
 def check_all(limit: int | None = None) -> dict[str, Any]:
