@@ -83,6 +83,10 @@ jobs:
     needs: build
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    # 这个 job 里有「等 Argo 同步 + 滚动更新」的等待，而本集群里
+    # 1GB 那台节点拉镜像很慢，收尾可能要十几分钟。
+    # 不给上限的话会被默认超时截断 → 变成一条假的失败通知。
+    timeout-minutes: 35
     permissions:
       # GitOps 模式：CI 不再直接改集群，而是把新镜像 tag 提交回仓库。
       # 所以这里要写权限，但**不再需要集群的写权限**。
@@ -189,7 +193,6 @@ jobs:
           done
           echo "::error::回写 tag 连续 5 次失败，请检查仓库权限或并发冲突"
           exit 1
-          echo "已提交，Argo CD 会在下一轮 reconciliation 时同步"
 
       - name: 等待 Argo CD 同步并滚动更新完成
         env:
@@ -198,18 +201,30 @@ jobs:
         run: |
           TAG="sha-$(echo "$GITHUB_SHA" | cut -c1-7)"
           LIVE=""
-          # Argo CD 默认 3 分钟轮询一次；本项目把 timeout.reconciliation 调成了 60s。
-          # 这里等最多 10 分钟，足够「轮询发现变化 + 滚动更新」走完
-          for i in $(seq 1 40); do
+          # Argo CD 默认 3 分钟轮询一次；本项目调成了 60s。
+          #
+          # ⚠️ 预算从 40 次 × 15s（10 分钟）放宽到 48 次 × 25s（20 分钟）：
+          # 实测这个集群收尾经常超过 10 分钟 —— 现在应用是 2 副本，
+          # 其中一台是 1/8 OCPU 的 Micro，拉镜像极慢。
+          # 预算不够时流水线会报「Argo 未同步」而失败，但那其实只是慢，
+          # 结果就是往邮箱里塞一条假的失败通知（真实发生过）。
+          for i in $(seq 1 48); do
             LIVE=$(ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes -o ConnectTimeout=10 \
                      "$K3S_USER@$K3S_HOST" \
                      "kubectl -n radar get deploy radar -o jsonpath='{.spec.template.spec.containers[0].image}'" \
                    2>/dev/null || true)
-            echo "[$i/40] 集群当前镜像: ${LIVE:-<读取失败>}"
+            echo "[$i/48] 集群当前镜像: ${LIVE:-<读取失败>}"
             case "$LIVE" in
               *"$TAG") echo "✅ Argo CD 已同步到 $TAG"; break ;;
             esac
-            sleep 15
+            # 每 6 轮打一次 Argo 状态，超时时能直接看出卡在哪一步
+            if [ $((i % 6)) -eq 0 ]; then
+              ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes -o ConnectTimeout=10 \
+                "$K3S_USER@$K3S_HOST" \
+                "echo '    Argo 状态: '\$(kubectl -n argocd get application radar -o jsonpath='{.status.sync.status}/{.status.health.status}' 2>/dev/null)" \
+                2>/dev/null || true
+            fi
+            sleep 25
           done
 
           case "$LIVE" in
