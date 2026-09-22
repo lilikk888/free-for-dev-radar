@@ -1,0 +1,72 @@
+---
+# 「免费额度即将到期」提醒规则。
+#
+# ⭐ 这里的做法值得单独说明：到期提醒**没有自己写发信代码**，
+# 而是把业务状态变成指标，再接进已有的告警链路：
+#
+#   我的领用记录（SQLite）
+#        ↓  /metrics（CreditsCollector 实时查库）
+#   radar_credits_due_soon
+#        ↓  本文件这条规则
+#   Alertmanager（severity=critical 才会发邮件）
+#        ↓
+#   163 邮箱
+#
+# 好处：
+#   1. 零新增 SMTP 凭据、零新增发信代码路径 —— 复用已经验证过的那条链路
+#   2. 顺带拿到历史曲线：「我的额度余量随时间怎么变」在 Grafana 里能直接画
+#   3. 提醒逻辑和告警逻辑统一，运维只有一个地方要看
+#
+# 与 observability/values 里那条路由的关系：
+#   severity=critical → email-critical（真发邮件）
+#   severity=warning  → null（静默，只在 UI 里看）
+# 所以「马上要过期」用 critical（需要你立刻动手），
+# 「已经过期」用 warning（事后知道就行，别天天吵你）。
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: radar-credits
+  namespace: radar
+  labels:
+    app.kubernetes.io/name: radar
+    app.kubernetes.io/component: credits
+spec:
+  groups:
+    - name: radar-credits
+      rules:
+        # 14 天内到期或已过期 → critical，会真的发邮件提醒你
+        - alert: RadarCreditExpiring
+          expr: radar_credits_due_soon > 0
+          for: 10m
+          labels:
+            severity: critical
+            component: radar
+          annotations:
+            summary: "有 {{ $value }} 个免费额度即将到期（或已过期）"
+            description: >-
+              打开应用首页看「我的清单」，把快过期的额度用掉 ——
+              免费额度过期不补，这是这个功能存在的唯一理由。
+
+        # 单条额度已过期 → warning（静默，不打扰）
+        - alert: RadarCreditExpired
+          expr: radar_credits_expiring_seconds < 0
+          for: 10m
+          labels:
+            severity: warning
+            component: radar
+          annotations:
+            summary: "{{ $labels.name }} 的免费额度已过期"
+            description: >-
+              {{ $labels.name }}（{{ $labels.entry_id }}）的额度已经过期。
+              要么去官网看有没有新的活动，要么在「我的清单」里移除。
+
+        # 记录总数突然掉到 0，通常意味着表被清空或接口挂了 —— 提醒你别以为"没有要到期的"
+        - alert: RadarCreditsTrackingLost
+          expr: radar_credits_tracked_total == 0 and radar_credits_registered_total > 0
+          for: 15m
+          labels:
+            severity: warning
+            component: radar
+          annotations:
+            summary: "领用记录数异常（tracked=0 但 registered>0）"
+            description: "数据自相矛盾，可能是表被误删或代码有 bug，检查 /api/mine。"

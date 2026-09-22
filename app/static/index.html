@@ -32,6 +32,26 @@
     cursor:pointer;font-size:13px;color:#4a5058;user-select:none}
   .chip:hover{border-color:var(--brand);color:var(--brand)}
   .chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
+  .mine{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin-bottom:6px}
+  .mine h2{margin:0 0 10px;font-size:15px}
+  .mine .row{display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--line);font-size:14px}
+  .mine .nm{flex:1;font-weight:500}
+  .mine .dl{font-size:12.5px;padding:2px 9px;border-radius:6px;background:#f2f4f7;color:#5a6270;white-space:nowrap}
+  .mine .dl.warn{background:var(--warn-soft);color:var(--warn)}
+  .mine .dl.bad{background:var(--danger-soft);color:var(--danger)}
+  .mine .dl.ok{background:var(--ok-soft);color:var(--ok)}
+  .mine .x{cursor:pointer;color:var(--muted);font-size:12.5px}
+  .mine .x:hover{color:var(--danger)}
+  .mine .empty2{color:var(--muted);font-size:13.5px}
+  .act{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
+  .btn{padding:5px 13px;border:1px solid var(--line);border-radius:8px;background:var(--card);
+    cursor:pointer;font-size:13px;color:#4a5058;font-family:inherit}
+  .btn:hover{border-color:var(--brand);color:var(--brand)}
+  .btn.on{background:var(--ok-soft);border-color:var(--ok);color:var(--ok)}
+  .act input[type=date]{padding:4px 8px;border:1px solid var(--line);border-radius:8px;
+    font-size:13px;font-family:inherit;color:var(--fg);background:var(--card)}
+  .act .save{padding:5px 12px;border:0;border-radius:8px;background:var(--brand);color:#fff;
+    cursor:pointer;font-size:13px;font-family:inherit}
   .cats{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin:16px 0 26px}
   .cat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px 15px;cursor:pointer}
   .cat:hover{border-color:var(--brand);box-shadow:0 2px 10px rgba(37,99,235,.08)}
@@ -89,6 +109,7 @@
   </div>
 
   <div class="filters" id="filters"></div>
+  <div id="mine"></div>
   <div class="cats" id="cats"></div>
 
   <div id="out"></div>
@@ -106,7 +127,7 @@
 
 <script>
 const $ = s => document.querySelector(s);
-const state = { q: "", cat: null, tags: [] };
+const state = { q: "", cat: null, tags: [], mine: {}, mineStats: {} };
 
 const TAG_TEXT = {
   no_card: "免信用卡", need_card: "需绑卡", need_id: "需实名",
@@ -145,6 +166,27 @@ async function renderCats(){
   });
 }
 
+function daysBadge(d){
+  if(d === null || d === undefined) return `<span class="dl">已注册</span>`;
+  if(d < 0)  return `<span class="dl bad">已过期 ${-d} 天</span>`;
+  if(d <= 7) return `<span class="dl bad">还有 ${d} 天到期</span>`;
+  if(d <= 14) return `<span class="dl warn">还有 ${d} 天到期</span>`;
+  return `<span class="dl ok">还有 ${d} 天</span>`;
+}
+
+function actionHTML(e){
+  const m = state.mine[e.id];
+  return `<div class="act">
+    <button class="btn ${m ? "on" : ""}" data-mark="${e.id}">${m ? "已注册 ✓" : "我注册了"}</button>
+    ${m ? daysBadge(m.days_left) : ""}
+    <span class="frm" data-frm="${e.id}" style="display:none">
+      <input type="date" data-date="${e.id}" value="${m && m.expires_at ? esc(m.expires_at) : ""}">
+      <button class="save" data-save="${e.id}">保存到期日</button>
+    </span>
+    ${m ? `<span class="x" data-unmark="${e.id}">取消</span>` : ""}
+  </div>`;
+}
+
 function cardHTML(e){
   // 标签由后端统一换算成标准 key（no_card / cn_ok / permanent …），前端只负责翻译
   const tags = e.tags || [];
@@ -158,7 +200,72 @@ function cardHTML(e){
     <div class="tags">${tagHTML}</div>
     ${e.tips ? `<div class="tips">注意：${esc(e.tips)}</div>` : ""}
     ${e.url ? `<a class="go" href="${esc(e.url)}" target="_blank" rel="noopener">打开官网 →</a>` : ""}
+    ${e.id ? actionHTML(e) : ""}
   </div>`;
+}
+
+/* ── 我的清单（领用记录 + 到期倒计时）── */
+async function loadMine(){
+  try{
+    const d = await (await fetch("/api/mine")).json();
+    state.mine = {};
+    (d.items||[]).forEach(it => state.mine[it.entry_id] = it);
+    state.mineStats = d.stats || {};
+  }catch(e){ state.mine = {}; }
+}
+
+function renderMine(){
+  const el = $("#mine");
+  const items = Object.values(state.mine || {});
+  const st = state.mineStats || {};
+  if(!items.length){
+    el.innerHTML = `<div class="mine"><h2>我的清单</h2>
+      <div class="empty2">还没有记录。在下面找到想用的服务，点「我注册了」，
+      填上额度到期日 —— 到期前会自动发邮件提醒你（国内平台的免费额度大多有期限，别忘了用）。</div></div>`;
+    return;
+  }
+  const sorted = items.sort((a,b) => {
+    if(a.days_left === null || a.days_left === undefined) return 1;
+    if(b.days_left === null || b.days_left === undefined) return -1;
+    return a.days_left - b.days_left;
+  });
+  el.innerHTML = `<div class="mine">
+    <h2>我的清单 · 已注册 ${st.registered||0} 个${st.expiring_14d ? ` · <span style="color:var(--danger)">${st.expiring_14d} 个 14 天内到期</span>` : ""}</h2>
+    ${sorted.map(m => `<div class="row">
+      <span class="nm">${esc(m.name || m.entry_id)}</span>
+      ${daysBadge(m.days_left)}
+      <span class="x" data-unmark="${esc(m.entry_id)}">移除</span>
+    </div>`).join("")}
+  </div>`;
+}
+
+async function markMine(id, expiresAt){
+  await fetch("/api/mine/" + encodeURIComponent(id), {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({status: "registered", expires_at: expiresAt || null}),
+  });
+  await loadMine(); renderMine(); run();
+}
+
+async function unmarkMine(id){
+  await fetch("/api/mine/" + encodeURIComponent(id), {method: "DELETE"});
+  await loadMine(); renderMine(); run();
+}
+
+function bindCardActions(){
+  document.querySelectorAll("[data-mark]").forEach(el => el.onclick = () => {
+    const id = el.dataset.mark;
+    const frm = document.querySelector(`[data-frm="${id}"]`);
+    if(state.mine[id]){ if(frm) frm.style.display = frm.style.display === "none" ? "inline" : "none"; }
+    else { if(frm) frm.style.display = "inline"; }
+  });
+  document.querySelectorAll("[data-save]").forEach(el => el.onclick = () => {
+    const id = el.dataset.save;
+    const inp = document.querySelector(`[data-date="${id}"]`);
+    markMine(id, inp ? inp.value : "");
+  });
+  document.querySelectorAll("[data-unmark]").forEach(el => el.onclick = () => unmarkMine(el.dataset.unmark));
 }
 
 function foreignHTML(list){
@@ -193,6 +300,7 @@ async function run(){
     html += foreignHTML(d.foreign);
   }
   out.innerHTML = html;
+  bindCardActions();
 }
 
 async function stats(){
@@ -217,7 +325,8 @@ document.querySelectorAll(".hints b").forEach(el => el.onclick = () => {
 const preset = new URLSearchParams(location.search).get("q");
 if(preset){ $("#q").value = preset; state.q = preset; }
 
-renderFilters(); renderCats(); stats(); run();
+renderFilters(); renderCats(); stats();
+loadMine().then(() => { renderMine(); run(); });
 </script>
 </body>
 </html>

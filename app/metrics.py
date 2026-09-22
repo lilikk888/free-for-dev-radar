@@ -125,6 +125,76 @@ class RadarStateCollector:
 WEB_REGISTRY.register(RadarStateCollector())
 
 
+class CreditsCollector:
+    """把「我的免费额度到期情况」暴露成指标。
+
+    ⭐ 这里体现一个设计取舍：到期提醒**不自己写发信代码**，
+    而是把业务状态转成指标，交给已经跑通的那条链路处理：
+
+        我的领用记录（SQLite）→ /metrics 指标 → Prometheus 规则 → Alertmanager → 163 邮件
+
+    好处：零新增 SMTP 凭据、零新增发信代码、且顺带能看到「快到期额度」的历史曲线。
+    这也是把「业务事件」接入「统一告警体系」的标准做法。
+    """
+
+    def collect(self) -> Iterator[GaugeMetricFamily]:
+        try:
+            from . import userdata
+
+            rows = userdata.list_all()
+        except Exception:  # pragma: no cover - 表还没建好时不要影响抓取
+            return
+
+        tracked = GaugeMetricFamily(
+            "radar_credits_tracked_total", "我记录的免费额度条数（不含已放弃）"
+        )
+        tracked.add_metric([], sum(1 for r in rows if r["status"] != "dropped"))
+        yield tracked
+
+        registered = GaugeMetricFamily(
+            "radar_credits_registered_total", "已注册的免费额度条数"
+        )
+        registered.add_metric([], sum(1 for r in rows if r["status"] == "registered"))
+        yield registered
+
+        # 距离到期还有多少秒（负数代表已经过期）。标签基数受限于用户自己的记录数，
+        # 不会失控（这是"我自己的清单"，不是全站数据）。
+        secs = GaugeMetricFamily(
+            "radar_credits_expiring_seconds",
+            "距额度到期还有多少秒（负数=已过期）",
+            labels=["entry_id", "name"],
+        )
+        soon = 0
+        for r in rows:
+            if r["status"] != "registered" or r["expires_at"] is None:
+                continue
+            d = r["days_left"]
+            if d is None:
+                continue
+            from datetime import date
+
+            try:
+                exp = date.fromisoformat(r["expires_at"])
+            except ValueError:
+                continue
+            delta = (exp - date.today()).total_seconds()
+            secs.add_metric([r["entry_id"], r["name"] or r["entry_id"]], delta)
+            if d <= 14:
+                soon += 1
+        yield secs
+
+        # 告警就看这一个：>0 说明有额度快到期（含已过期）
+        count = GaugeMetricFamily(
+            "radar_credits_due_soon",
+            "14 天内到期或已过期的额度数量（用来触发提醒告警）",
+        )
+        count.add_metric([], soon)
+        yield count
+
+
+WEB_REGISTRY.register(CreditsCollector())
+
+
 def render_web_metrics() -> tuple[bytes, str]:
     return generate_latest(WEB_REGISTRY), CONTENT_TYPE_LATEST
 

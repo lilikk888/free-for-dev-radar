@@ -7,11 +7,13 @@ from typing import Any
 
 from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from . import data_curated
 from . import db
 from . import metrics as metrics_mod
 from . import search as search_mod
+from . import userdata
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -112,6 +114,47 @@ def api_categories(q: str = Query("", description="给定时按相关度排序")
         order = {k: i for i, k in enumerate(guessed)}
         cats.sort(key=lambda c: order.get(c["key"], 999))
     return {"categories": cats, "guessed": guessed}
+
+
+class MinePayload(BaseModel):
+    """标记我的领用状态。"""
+
+    status: str = Field("registered", description="interested / registered / dropped")
+    expires_at: str | None = Field(None, description="额度到期日 YYYY-MM-DD")
+    note: str | None = Field(None, description="备注，比如用了哪个模型")
+
+
+@app.get("/api/mine")
+def api_mine_list() -> dict[str, Any]:
+    """我的清单：已注册 / 想试试 / 快到期。"""
+    return {"items": userdata.list_all(), "stats": userdata.stats()}
+
+
+@app.put("/api/mine/{entry_id}")
+def api_mine_put(entry_id: str, payload: MinePayload) -> dict[str, Any]:
+    """新建或更新一条领用记录（页面上的「我注册了」按钮打的就是这个）。"""
+    try:
+        item = userdata.upsert(
+            entry_id,
+            status=payload.status,
+            expires_at=payload.expires_at,
+            note=payload.note,
+        )
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "item": item, "days_left": userdata.days_left(item.get("expires_at"))}
+
+
+@app.delete("/api/mine/{entry_id}")
+def api_mine_delete(entry_id: str) -> dict[str, Any]:
+    return {"ok": userdata.delete(entry_id)}
+
+
+@app.get("/api/mine/expiring")
+def api_mine_expiring(days: int = Query(14, ge=1, le=365)) -> dict[str, Any]:
+    """即将到期（含已过期）的额度 —— 邮件提醒看的就是这份数据。"""
+    items = userdata.expiring(within_days=days)
+    return {"days": days, "count": len(items), "items": items}
 
 
 @app.get("/api/curated")

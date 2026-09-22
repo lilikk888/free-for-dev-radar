@@ -45,6 +45,22 @@ CREATE TABLE IF NOT EXISTS changes (
 CREATE INDEX IF NOT EXISTS idx_changes_detected_at ON changes(detected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_changes_entry_key ON changes(entry_key);
 CREATE INDEX IF NOT EXISTS idx_changes_type ON changes(change_type);
+
+-- 「我的领用记录」：用户自己标的状态。
+-- entry_id 指向 data_curated.py 里的精选 id（例如 zhipu / aliyun-bailian）。
+-- 免费额度大多有期限，所以 expires_at 是这张表的重点字段 ——
+-- 到期前要能提醒用户，否则领了 2000 万 tokens 忘了用，白过期。
+CREATE TABLE IF NOT EXISTS mine (
+    entry_id      TEXT PRIMARY KEY,
+    status        TEXT NOT NULL DEFAULT 'interested',  -- interested / registered / dropped
+    registered_at TEXT,
+    expires_at    TEXT,      -- ISO 日期，用户填的额度到期日
+    note          TEXT,
+    updated_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mine_expires_at ON mine(expires_at);
+CREATE INDEX IF NOT EXISTS idx_mine_status ON mine(status);
 """
 
 
