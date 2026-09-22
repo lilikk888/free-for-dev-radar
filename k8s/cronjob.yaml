@@ -26,7 +26,7 @@ spec:
             runAsUser: 10001
           containers:
             - name: collect
-              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-6102d75
               imagePullPolicy: Always
               command: ["python", "-m", "app.cli", "collect"]
               env:
@@ -80,7 +80,7 @@ spec:
             runAsUser: 10001
           containers:
             - name: check-links
-              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-6102d75
               imagePullPolicy: Always
               command: ["python", "-m", "app.cli", "check-links"]
               env:
@@ -138,7 +138,7 @@ spec:
             runAsUser: 10001
           containers:
             - name: digest
-              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-6102d75
               imagePullPolicy: Always
               command: ["python", "-m", "app.cli", "digest"]
               env:
