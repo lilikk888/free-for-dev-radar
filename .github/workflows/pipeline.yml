@@ -140,6 +140,15 @@ jobs:
             exit 1
           fi
 
+      # ⭐ 在构建镜像之前先卡一道 YAML 校验。
+      # 起因：脚本批量追加 envFrom 时产生重复键，PyYAML 不报错、
+      # kustomize 报错 → Argo CD 卡在 Unknown，整条 GitOps 停摆。
+      # 这类错误应该在 CI 就拦住，而不是等 Argo 报个「第 49 行」让人猜。
+      - name: 校验 k8s 清单（含重复键检查）
+        run: |
+          pip install --quiet pyyaml
+          python tools/validate-manifests.py
+
       - name: 回写镜像 tag 到仓库
         run: |
           TAG="sha-$(echo "$GITHUB_SHA" | cut -c1-7)"

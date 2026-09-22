@@ -26,7 +26,7 @@ spec:
             runAsUser: 10001
           containers:
             - name: collect
-              image: ghcr.io/lilikk888/free-for-dev-radar:sha-2ede1a5
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
               imagePullPolicy: Always
               command: ["python", "-m", "app.cli", "collect"]
               env:
@@ -80,7 +80,7 @@ spec:
             runAsUser: 10001
           containers:
             - name: check-links
-              image: ghcr.io/lilikk888/free-for-dev-radar:sha-2ede1a5
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
               imagePullPolicy: Always
               command: ["python", "-m", "app.cli", "check-links"]
               env:
@@ -138,19 +138,23 @@ spec:
             runAsUser: 10001
           containers:
             - name: digest
-              image: ghcr.io/lilikk888/free-for-dev-radar:sha-2ede1a5
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
               imagePullPolicy: Always
               command: ["python", "-m", "app.cli", "digest"]
               env:
                 - name: RADAR_DB_PATH
                   value: /data/radar.db
-              # 数据库连接串来自 Secret：配了就切 PostgreSQL，没配回退 SQLite
+              # ⚠️ 只能有一个 envFrom 键。之前脚本追加时没注意这里已经有 SMTP 的
+              # envFrom，造成同一个 key 出现两次 —— PyYAML 宽容地接受了，
+              # 但 kustomize 直接报错（Argo 卡在 Unknown）：
+              #   line 49: mapping key "envFrom" already defined at line 45
+              # 所以两个 Secret 必须合并到同一个 envFrom 列表里。
               envFrom:
+                # 数据库连接串：配了就切 PostgreSQL，没配回退 SQLite
                 - secretRef:
                     name: radar-pg
                     optional: true
-              envFrom:
-                # 可选：没建这个 Secret 时 Pod 起不来，所以用 optional
+                # 发周报用的 SMTP 凭据（可选，没建也不会卡住启动）
                 - secretRef:
                     name: radar-smtp
                     optional: true
