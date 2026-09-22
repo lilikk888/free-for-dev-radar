@@ -1,0 +1,63 @@
+---
+# 网络策略（NetworkPolicy）—— 用 Calico 的策略引擎落地「最小暴露面」
+#
+# 默认姿态：radar 命名空间里的所有 Pod 拒绝一切入站流量。
+# 然后由下面那条策略**显式**放行两条必要通路。
+#
+# ⚠️ K8s 的 NetworkPolicy 是「叠加求并集」的：
+#    多条策略之间是 OR 关系，任一策略放行即放行。
+#    所以「默认拒绝」+「显式放行」是最常用的组合写法。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: radar-default-deny-ingress
+  namespace: radar
+spec:
+  # 空 selector = 选中该命名空间内所有 Pod
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  # 不写 ingress 规则 = 没有任何入站被允许
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: radar-allow-ingress
+  namespace: radar
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: radar
+  policyTypes:
+    - Ingress
+  ingress:
+    # 1) 允许 ingress-nginx 转发进来的外部流量（用户访问网页）
+    #    namespaceSelector 用 K8s 自动打的 kubernetes.io/metadata.name 标签，
+    #    比自定义标签可靠（不会被误删）。
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000
+
+    # 2) 允许 Prometheus 抓取业务指标（ServiceMonitor 走的就是这条）
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8000
+
+# 说明：
+# - **出站不限制** —— 采集任务需要访问公网（free-for-dev.com），
+#   如果这里加 Egress 默认拒绝，必须同时放行 DNS(53) 和外网，否则采集会静默失败。
+#   所以本次只收紧入站，这是「先拿到收益、再逐步收紧」的务实做法。
+# - **kubelet 的健康探针不受影响**：探针由节点发起（host → pod），
+#   Calico 默认信任本机到 Pod 的流量。
+# - 如果想验证策略是否真的生效：
+#     kubectl run probe --rm -it --image=busybox:1.36 --restart=Never -- \
+#       wget -qO- --timeout=3 http://radar.radar.svc.cluster.local/healthz
+#   在 default 命名空间执行 → 应当超时（被拒绝）。

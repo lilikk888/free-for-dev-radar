@@ -2,166 +2,224 @@
 
 记录这个集群**不写在代码里、但不知道就会踩坑**的配置。换台机器重建时要照着做。
 
-## 集群基本信息
+## 一、集群基本信息（截至 2026-09-22）
 
 | 项 | 值 |
 |---|---|
-| 安装方式 | kubeadm v1.36.4（单节点起步） |
-| 控制面节点 | `free-arm-2c12g`（Oracle Cloud 东京，ARM **aarch64**，2 OCPU / 12 GB） |
-| 控制面私网 IP | `10.0.2.134` |
-| 公网访问 | Cloudflare Tunnel（**不需要开任何入站端口到公网**） |
+| 安装方式 | kubeadm **v1.36.4**，三节点跨云 |
 | Pod 网段 | `192.168.0.0/16` |
-| CNI | Calico v3.30.0 |
-| 容器运行时 | containerd 2.3.4（`SystemdCgroup = true`） |
+| Service 网段 | `10.96.0.0/12` |
+| CNI | Calico v3.30.0，**VXLAN 模式**（`ipipMode: Never` / `vxlanMode: Always`） |
+| 容器运行时 | containerd（各节点 2.2.x~2.3.x，均 `SystemdCgroup = true`） |
+| 全局 MTU | **1280**（`calico-config` 的 `veth_mtu`，原因见「跨云」一节） |
 | 存储 | local-path-provisioner |
-| 入口 | ingress-nginx（DaemonSet + hostPort 80/443） |
+| 入口 | ingress-nginx（DaemonSet + hostPort 80/443，已用 nodeSelector 限定在主控） |
+| 公网访问 | Cloudflare Tunnel（**不需要向公网放开任何端口**） |
 
-## OCI 网络配置（重建时最容易漏）
+### 三个节点
 
-### 三台实例都在同一个 VCN、同一个子网
+| 节点名 | 云 | 地区 | 架构 | 角色 | 地址 | 规格 |
+|---|---|---|---|---|---|---|
+| `free-arm-2c12g` | Oracle | 东京 | arm64 | 控制面 | `10.0.2.134` | 2 OCPU / 12 GB |
+| `instance-20260902-1251` | Oracle | 东京 | amd64 | worker | `10.0.2.63` | 1/8 OCPU / 1 GB |
+| `iz7xvdabk2g1oasakx27fnz` | 阿里云 | 广州 | amd64 | worker | `10.9.0.2`（隧道） | 2 vCPU / 1.6 GB |
 
-| 实例 | 私网 IP | 公网 IP | 架构 | 角色 |
-|---|---|---|---|---|
-| free-arm-2c12g | 10.0.2.134 | 193.123.164.23 | aarch64 | K8s 控制面 |
-| instance-20260902-1214 | 10.0.2.22 | 161.33.148.174 | x86_64 | 备用 |
-| instance-20260902-1251 | 10.0.2.63 | 161.33.149.235 | x86_64 | etcd 异机备份 |
+节点标签：`cloud=oracle|aliyun`、`topology.kubernetes.io/region=ap-tokyo-1|cn-guangzhou`
 
-子网 CIDR `10.0.2.0/24`，网关 `10.0.2.1`，VCN CIDR `10.0.0.0/16`。
+> ⭐ **这个集群本身就是个知识点**：三个节点跨两家云、跨两个地域、跨两种 CPU 架构（arm64 + amd64），
+> 用 WireGuard 组成一张扁平网络，Calico 在上面跑 VXLAN overlay。
+> 跨架构能成立的前提是**镜像必须多架构**（radar 自己的镜像是 amd64+arm64 双架构）。
 
-> ⚠️ **同一个子网 = 共用同一份安全列表**。也就是加一条规则三台一起生效
-> （但安全列表只是「允许」，不是「监听」—— 没进程监听端口的机器不会因此暴露什么）。
-> 想按实例分别控制要用 **NSG**（网络安全组），它挂在实例网卡上。
+## 二、网络拓扑与隧道
 
-### 需要放行的端口（安全列表 / NSG，源限制 `10.0.0.0/16`）
-
-| 源 | 协议 | 端口 | 用途 |
-|---|---|---|---|
-| `10.0.0.0/16` | TCP | `6443` | apiserver（kubeadm join 必需）|
-| `10.0.0.0/16` | TCP | `10250` | kubelet（`kubectl logs/exec`、探针必需）|
-| `10.0.0.0/16` | TCP | `2379-2380` | etcd（做多控制面才需要）|
-| `10.0.0.0/16` | 协议号 `4` | — | IPIP —— **仅在节点跨子网时才需要**，见下 |
-
-**默认的 22 / 80 / 443 是给别的东西用的**，和 K8s 无关。
-apiserver 只在内网监听 + 隧道出站，**公网不需要放行 6443**。
-
-> ⚠️ 实测踩到：安全列表只放行 22/80/443 时，节点能 SSH 到控制面，
-> 但 `kubeadm join` 会因为 `10.0.2.134:6443` 不通而失败。
-> 症状很像"网络没问题"，实际是安全列表缺规则。
-
-## Calico 用 CrossSubnet 而不是默认的 Always
-
-```bash
-kubectl get ippool default-ipv4-ippool -o jsonpath='{.spec.ipipMode}'   # CrossSubnet
+```
+Oracle 东京 10.0.2.0/24 ─┐
+  ├ 10.0.2.134 控制面 ◄──┼── WireGuard (UDP 51820) ── 阿里云广州 10.9.0.2
+  └ 10.0.2.63  worker    │       10.9.0.0/30            隧道内网
+                          └─ 同子网，走 VPC 直接通信
 ```
 
-| 模式 | 同子网节点间 | 跨子网节点间 |
+- 隧道网段 `10.9.0.0/30`：主控 `10.9.0.1`、阿里云 `10.9.0.2`，**MTU 1380**
+- 阿里云节点用 `--node-ip=10.9.0.2` 注册，所以它的 kubelet/Calico 都走隧道
+- 阿里云侧 `AllowedIPs = 10.9.0.0/30, 10.0.2.0/24`（要能直连 `10.0.2.134:6443`）
+- 主控侧 `AllowedIPs = 10.9.0.2/32`
+- Micro 加了静态路由 `10.9.0.0/30 via 10.0.2.134`（systemd 单元 `route-wg.service`），
+  否则 Micro 上的 Pod 找不到阿里云节点
+
+**为什么不让阿里云节点直接连 apiserver 的隧道 IP？** 因为 apiserver 证书 SAN 里没有 `10.9.0.1`，
+而**有** `10.0.2.134`。让隧道把 `10.0.2.0/24` 也路由过来，就能复用现成证书，**不用动证书**。
+
+### 跨云带来的三个必然调整
+
+| 问题 | 现象 | 处理 |
 |---|---|---|
-| `Always`（Calico 默认）| **IPIP 封装** | IPIP 封装 |
-| **`CrossSubnet`（本集群）** | **直接路由** | IPIP 封装 |
-| `Never` | 直接路由 | 直接路由（跨子网会不通）|
+| VXLAN 装不下 | 默认 VXLAN MTU 1450，进不了 MTU 1380 的隧道 | 全局 `veth_mtu: 1280` |
+| Calico 选错网卡 | 阿里云节点会选到 `eth0`（172.29.x，对端不可达） | `IP_AUTODETECTION_METHOD=can-reach=10.0.2.134` |
+| 延迟高 | 东京↔广州实测 **165 ms** | 给阿里云节点打 `PreferNoSchedule` 污点，重要负载不调度过去 |
 
-**为什么改**：本集群所有节点都在 `10.0.2.0/24`，同子网之间走直接路由即可
-（数据帧按 MAC 送达，Pod 网段只在 IP 头里，不需要 ARP 到 Pod IP）。
-这样就**不需要在安全列表里放行 IP 协议号 4** —— 而很多云控制台的协议下拉里
-根本没有"自定义协议号"这一项，加不了。
+## 三、需要放行的端口
 
-改法（可在线改，改完滚动重启 calico-node）：
+### OCI 安全列表（源 `10.0.0.0/16`）
 
-```bash
-kubectl patch ippool default-ipv4-ippool --type merge \
-  -p '{"spec":{"ipipMode":"CrossSubnet","vxlanMode":"Never"}}'
-kubectl -n kube-system rollout restart daemonset/calico-node
-```
-
-> ⚠️ 如果以后把节点加到了**别的子网**，就必须回头放行 IP 协议号 4（IPIP），
-> 或者改用 VXLAN（`vxlanMode: CrossSubnet` + 放行 UDP 4789 —— 这个端口好加得多）。
-
-## ⚠️ 加节点前必读：两个坑 + 一个硬结论
-
-### 坑一：**两台机器上都有本地 iptables 规则在拦 k8s 端口**
-
-这些实例的镜像/cloud-init 预置了一条"除 22/80/443 全拒绝"的规则：
-
-```
--P INPUT ACCEPT
--A INPUT -p tcp --dport 22 -j ACCEPT
--A INPUT -p tcp --dport 80 -j ACCEPT      # 只有部分机器有
--A INPUT -p tcp --dport 443 -j ACCEPT
--A INPUT -j REJECT --reject-with icmp-host-prohibited   # ← 把上面没列的端口全挡了
-```
-
-**关键认知**：`-P INPUT ACCEPT`（默认策略是放行）看着很安全，但**这条 REJECT 排在前面**，
-等于把默认策略架空了。所以**只看默认策略会误判**。
-
-而且**必须两台都改**，方向是双向的：
-
-| 方向 | 用途 | 改哪台 |
+| 协议 | 端口 | 用途 |
 |---|---|---|
-| 新节点 → 控制面:6443 | kubeadm join、kubelet 上报 | 控制面的 INPUT |
-| 控制面 → 新节点:10250 | `kubectl logs/exec`、探针 | 新节点的 INPUT |
-| 双向 TCP 179 | Calico BGP 交换路由 | 两台的 INPUT 都要 |
+| TCP | `6443` | apiserver |
+| TCP | `10250` | kubelet（`logs/exec`、探针） |
+| TCP | `9100` | node-exporter（Prometheus 抓主机指标） |
+| TCP | `10249` | kube-proxy 指标 |
+| **UDP** | **`4789`** | **VXLAN 跨节点 Pod 网络（必需）** |
+| TCP | `2379-2380` | etcd（只有加第二个控制面才需要） |
 
-放行命令（只放 VCN 内网，不动那条 REJECT）：
+> ⚠️ OCI 控制台里 UDP 端口要选「**自定义 UDP**」才能填端口；选「所有 UDP」会锁死成全部端口。
 
-```bash
-for dp in 179 6443 10250 2379 2380; do
-  sudo iptables -I INPUT -s 10.0.0.0/16 -p tcp --dport $dp -j ACCEPT
-done
-sudo netfilter-persistent save     # 持久化，否则重启就没了
+### 阿里云安全组（入方向，源 `193.123.164.23/32`）
+
+| 协议 | 端口 | 用途 |
+|---|---|---|
+| UDP | `51820` | WireGuard 隧道（**唯一需要开的口**） |
+
+## 四、⚠️ 加节点前必读：四个坑
+
+### 坑一：**本机 iptables 在拦，而且 INPUT 和 FORWARD 各埋了一条**
+
+Oracle 实例镜像预置：
+
+```
+-P INPUT ACCEPT          ← 默认策略是「放行」，看着像没防火墙
+-A INPUT  -p tcp --dport 22 -j ACCEPT
+-A INPUT  -j REJECT --reject-with icmp-host-prohibited   ← 把默认策略架空了
+-A FORWARD -j REJECT --reject-with icmp-host-prohibited  ← 这条更隐蔽！
 ```
 
-> ⚠️ 顺带一个教训：我们一开始以为是 **OCI 安全列表**的问题，
-> 让用户在控制台加规则，加完还是不通 —— 因为真正的拦截在**本机 iptables**。
-> **排查网络不通时，先看本机 iptables，再看云平台防火墙**。
+- **INPUT 上的 REJECT** 会拦节点间通信（10250、4789、179…）
+- **FORWARD 上的 REJECT** 会拦 **Pod 的跨节点流量**（Pod 的包要经 FORWARD 转发出去）
 
-### 坑二：containerd 装完后必须 **restart**，不能只用 `enable --now`
+⭐ **两条都要处理，而且必须插在 REJECT 之前**（不是清空防火墙）：
 
 ```bash
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y containerd.io
+# INPUT：给 VCN 内网和隧道网段放行
+sudo iptables -I INPUT <REJECT的行号> -s 10.0.0.0/16  -j ACCEPT
+sudo iptables -I INPUT <REJECT的行号> -s 10.9.0.0/30  -j ACCEPT   # 跨云隧道
+# FORWARD：Pod 转发放行
+sudo iptables -I FORWARD <REJECT的行号> -s 192.168.0.0/16 -j ACCEPT
+sudo iptables -I FORWARD <REJECT的行号> -d 192.168.0.0/16 -j ACCEPT
+sudo netfilter-persistent save
+```
+
+**行号怎么取**：`sudo iptables -L INPUT --line-numbers -n | awk '/REJECT/{print $1; exit}'`
+
+> ⭐⭐ **最有价值的一条排查经验：错误码能区分拦截层**
+>
+> | 错误码 | 含义 | 去哪查 |
+> |---|---|---|
+> | `No route to host` | 有人 **REJECT**（回 ICMP host-prohibited） | **本机 iptables**（INPUT + FORWARD 都要看） |
+> | `timeout` / 静默丢包 | **云平台防火墙**丢的 | OCI 安全列表 / 阿里云安全组 / NSG |
+>
+> 我们在这个集群上被同一类问题绊了 **四次**（Micro 的 INPUT、主控的 INPUT、
+> Micro 的 FORWARD、WireGuard 的 ListenPort），前三次都误判成"云平台安全列表"。
+> **结论：任何端口不通，先看 `iptables -L INPUT/FORWARD`，再看云控制台。**
+
+### 坑二：containerd 必须 `restart`，`enable --now` 是空操作
+
+已在运行的 containerd，`systemctl enable --now` 不会重读配置。
+
+```bash
 sudo bash -c "containerd config default > /etc/containerd/config.toml"
 sudo sed -i "s/SystemdCgroup = false/SystemdCgroup = true/" /etc/containerd/config.toml
-sudo systemctl enable --now containerd    # ❌ 如果它已经在跑，这行是空操作
-sudo systemctl restart containerd         # ✅ 必须显式 restart 才会读新配置
+sudo systemctl restart containerd      # ✅ 必须 restart
 ```
 
-**症状**：`kubeadm join` 报
+**症状**：`kubeadm join` 报 `[ERROR CRI] unknown service runtime.v1.RuntimeService`。
+
+> ⚠️ 另外注意 **docker 装的 containerd 默认 `disabled_plugins = ["cri"]`**，
+> k8s 用不了，必须重新生成默认配置启用 CRI（阿里云那台就是这种情况，原配置已备份为
+> `/etc/containerd/config.toml.bak-docker`）。
+
+### 坑三：国内节点拉不到 `registry.k8s.io`
+
+会 302 到 `europe-west3-docker.pkg.dev`（Google 域名），国内直接 i/o timeout。
+
+用 containerd 2.x 的 `certs.d` 机制配镜像源：
+
+```bash
+mkdir -p /etc/containerd/certs.d/registry.k8s.io /etc/containerd/certs.d/docker.io
+
+cat > /etc/containerd/certs.d/registry.k8s.io/hosts.toml << 'EOF'
+server = "https://registry.k8s.io"
+[host."https://k8s.m.daocloud.io"]
+  capabilities = ["pull", "resolve"]
+EOF
+
+cat > /etc/containerd/certs.d/docker.io/hosts.toml << 'EOF'
+server = "https://docker.io"
+[host."https://docker.m.daocloud.io"]
+  capabilities = ["pull", "resolve"]
+EOF
 ```
-[ERROR CRI]: could not connect to the container runtime:
-  unknown service runtime.v1.RuntimeService
+
+然后把配置里 **CRI 那一段**的 `config_path` 指过去：
+
+```bash
+# ⚠️ 不要用 sed 全局替换！config.toml 里有三处同名 config_path，改错会让 containerd 起不来
+# 只改 [plugins.'io.containerd.cri.v1.images'.registry] 段下那一个：
+#     config_path = "/etc/containerd/certs.d"
+sudo systemctl restart containerd
 ```
-这是 **CRI 插件没加载**的典型特征（配置没被读取，containerd 用的还是默认状态）。
 
-### ⭐ 硬结论：**1 GB / 1-8 OCPU 的 OCI Micro 撑不住 k8s worker**
+**验证方法（重要）**：必须用 `ctr images pull --hosts-dir /etc/containerd/certs.d <ref>`，
+直接 `ctr images pull` **不走 CRI 的镜像配置**，会误判成"还是不通"。
 
-实测数据（Oracle E2.1.Micro，1 GB RAM + 1/8 OCPU，只有系统服务无额外负载）：
+> ⚠️ 阿里云官方的 `registry.aliyuncs.com/google_containers` 需要授权，实测拉不动；
+> daocloud 的公共镜像源实测可用。
 
-| 指标 | 实测值 | 说明 |
+### 坑四：WireGuard 两端都要显式写 `ListenPort`
+
+只在一端写端口，另一端会监听在**随机端口**，握手包到了却没人接。
+
+**症状**：一端 `transfer: 0 B received`，另一端抓包能看到包已经送达。
+
+```bash
+sudo wg show        # 一眼看 listening port 对不对
+```
+
+## 五、1 GB Micro 能不能当 worker？—— 能，但要治两处
+
+这台 `1/8 OCPU + 1 GB` 的 Micro 最初实测是「撑不住」的（load 42、IO 等待 69%），
+但**治掉下面两处之后它可以稳定工作**：
+
+### 1. 关掉系统自带的自动更新任务（真正吃 CPU 的元凶）
+
+实测那台机器上 CPU 的大头是 **snapd / apt-check / check-new-release / unattended-upgrades**，
+不是 k8s 组件。1/8 OCPU 的机器上它们一跑，磁盘和 CPU 立刻被打满：
+
+```bash
+sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer
+sudo systemctl mask apt-daily.timer apt-daily-upgrade.timer
+sudo systemctl disable --now snapd.service snapd.socket snapd.seeded.service
+sudo systemctl disable --now unattended-upgrades.service packagekit.service
+sudo systemctl mask motd-news.timer
+```
+
+### 2. 摆正它的资源定位
+
+`kubectl top` 实测（装好 metrics-server 之后）：
+
+| 节点 | CPU | 内存 |
 |---|---|---|
-| join 本身 | ✅ 成功 | 节点能注册、能变 Ready |
-| 稳定运行 | ❌ **24 分钟后仍 NotReady** | calico-node 永远起不来 |
-| load average | **38 ~ 42** | 正常应 < 2 |
-| 内存可用 | 137 MB | kubelet+containerd+calico+kube-proxy ≈ 340 MB |
-| **磁盘 IO 等待** | **56% ~ 69%** | 真正的瓶颈不是 CPU |
-| 持续块读 | **51 MB/s，24 分钟共 70+ GB** | 容器镜像解包在低 IOPS 引导卷上打转 |
-| `crictl images` | 超时无响应 | containerd 完全卡死 |
-| SSH | 握手超时 | 机器还在，但慢到无法交互 |
+| 主控（2 OCPU / 12 GB） | 18% | 43% |
+| **Micro（1/8 OCPU / 1 GB）** | **4%** | **94%** ← 瓶颈在内存 |
+| 阿里云（2 vCPU / 1.6 GB） | 3% | 63% |
 
-**根因**：容器镜像解包是 **IOPS 密集型**操作，而 Micro 规格的引导卷 IOPS/吞吐极低
-（几百 IOPS 级别）。CPU 只有 1/8 OCPU 更是雪上加霜。**不是配置问题，是规格问题。**
+- CPU 平均只有 4%，但**突发时会被主机的 quota 卡住（steal 能到 60%+）**
+- 内存是硬约束：**不要往这台调度业务 Pod**，让它只跑 DaemonSet（calico/kube-proxy/node-exporter/promtail）
+- 配合 `PreferNoSchedule` 污点或 nodeSelector 把业务负载引到另外两台
 
-**官方最低要求是 2 CPU / 2 GB** —— 实测确认这个数字不是随便写的。
+> **结论更新**：早期结论「1 GB 完全不能用」过于绝对。准确说法是
+> **「1 GB 能跑 worker，但只能承载 DaemonSet 级别的负载，且必须关掉系统自动更新」**。
 
-**后果提醒**：那台 Micro 上还跑着 `x-ui`（用户的代理面板），
-被 k8s 组件饿死后代理也不通了。**在资源紧张的机器上做实验前，
-先确认上面有没有在跑别的服务。**
+## 六、控制面指标开放
 
-**真要第二个节点，应该用**：本地虚拟机（内存够、磁盘快，可走 WireGuard 接入）、
-或一台 ≥2C/2G 的云主机。跨云接入还要额外处理 apiserver 暴露与网络封装，不划算。
-
-## 控制面指标开放
-
-kubeadm 默认把 scheduler / controller-manager / etcd 的 metrics 只绑 `127.0.0.1`，
-Prometheus 抓不到。用脚本打开：
+kubeadm 默认把 scheduler / controller-manager / etcd 的 metrics 只绑 `127.0.0.1`：
 
 ```bash
 sudo NODE_IP=10.0.2.134 bash observability/scripts/enable-control-plane-metrics.sh
@@ -169,28 +227,41 @@ sudo NODE_IP=10.0.2.134 bash observability/scripts/enable-control-plane-metrics.
 
 详见 [`observability/README.md`](../observability/README.md) 的「坑一」。
 
-## 日常运维命令
+## 七、网络策略与资源视图
+
+- **NetworkPolicy**（Calico 策略引擎）：`k8s/networkpolicy.yaml`
+  - `radar` 命名空间默认**拒绝所有入站**，只放行来自 `ingress-nginx`（外部访问）和
+    `monitoring`（Prometheus 抓 `/metrics`）的 8000 端口
+  - 出站不限制（采集任务要访问公网）
+- **metrics-server**：已装（`kube-system`），提供 `kubectl top`，也是 **HPA** 的前提
+- **HPA 演示**：`demos/hpa/`（独立命名空间，不影响业务）
+
+## 八、日常运维命令
 
 ```bash
 # --- 集群状态 ---
 kubectl get nodes -o wide
 kubectl get pods -A | grep -v Running      # 只看异常
 kubectl get application -n argocd          # GitOps 同步状态
+kubectl top nodes / kubectl top pods -A    # 需要 metrics-server
+
+# --- 跨云隧道 ---
+sudo wg show                               # 握手、流量计数
+ping -c 3 10.9.0.2                         # 隧道通不通
 
 # --- 控制面 ---
 sudo kubeadm certs check-expiration        # 证书还有多久过期
 sudo systemctl status kubelet containerd
-sudo crictl ps                             # 容器运行时视角
 
-# --- 排查节点不通 ---
-# 从另一台机器测端口，而不是只看 SSH 通不通
-for p in 22 6443 10250; do
+# --- 排查节点不通（先本机 iptables，再云防火墙）---
+sudo iptables -L INPUT --line-numbers -n | tail -5
+sudo iptables -L FORWARD --line-numbers -n | tail -5
+for p in 6443 10250 4789; do
   printf "%s -> " "$p"; timeout 3 bash -c "</dev/tcp/10.0.2.134/$p" && echo 通 || echo 不通
 done
 
 # --- 恢复 ---
-# etcd 备份与恢复：见 ops/etcd-backup/README.md 和
-#                 docs/postmortems/2026-09-21-etcd-snapshot-restore.md
+# etcd 备份与恢复：见 ops/etcd-backup/README.md
 # ⚠️ 恢复后必须重启依赖 informer 缓存的组件（kube-state-metrics、各 operator）
 ```
 
@@ -202,3 +273,4 @@ done
 | etcd 备份与恢复 | [`ops/etcd-backup/README.md`](../ops/etcd-backup/README.md) |
 | GitOps / Argo CD | [`gitops/README.md`](../gitops/README.md) |
 | 演练与事故报告 | [`docs/postmortems/`](../docs/postmortems/README.md) |
+| 跨云节点接入实录 | [`docs/postmortems/2026-09-22-cross-cloud-node.md`](../docs/postmortems/2026-09-22-cross-cloud-node.md) |

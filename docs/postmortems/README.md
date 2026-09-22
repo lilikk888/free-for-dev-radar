@@ -65,6 +65,7 @@
 | 2026-09-21 | [etcd 快照备份与真实恢复](2026-09-21-etcd-snapshot-restore.md) | 演练 | ✅ 成功，不可用 ~90s |
 | 2026-09-21 | [监控指标静默失效，关键告警从未可能触发](2026-09-21-silent-alert-failure.md) | 事故 | ✅ 已修复 + 加防回归测试 |
 | 2026-09-21 | [告警 fire drill：验证告警真的会响](2026-09-21-alert-fire-drill.md) | 演练 | ✅ 两条关键告警均 firing 并送达 Alertmanager |
+| 2026-09-22 | [把阿里云广州节点接入东京集群（跨云 K8s）](2026-09-22-cross-cloud-node.md) | 架构变更 + 排障 | ✅ 三节点跨云集群，跨云 Pod 通信 0% 丢包 |
 
 推荐阅读顺序：
 
@@ -76,6 +77,9 @@
    告警只进 UI、不会通知到人。
 3. **[etcd 快照备份与真实恢复](2026-09-21-etcd-snapshot-restore.md)** ——
    真做了一遍停机恢复，实测 90 秒，并顺带撞出一次 CI 部署失败（流程教训）。
+4. **[跨云节点接入](2026-09-22-cross-cloud-node.md)** —— 最新一篇，讲**「同一个错误假设撞了三次」**：
+   `No route to host` 明明是 REJECT（本机 iptables），我却三次都去怀疑云平台防火墙。
+   含 WireGuard 隧道、VXLAN MTU、containerd 镜像源、以及一次把集群配置写坏的教训。
 
 ## 计划中
 
