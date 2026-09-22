@@ -9,6 +9,14 @@ on:
   pull_request:
   workflow_dispatch:
 
+# ⭐ 并发控制：同一个分支只允许一条流水线在跑。
+# 不加这个，两次快速推送会让两个 run 同时回写镜像 tag，
+# 后一个 push 会被拒（`! [rejected] main -> main (fetch first)`）——
+# 这个失败真实发生过（run 35750993767）。
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   IMAGE: ghcr.io/${{ github.repository }}
 
@@ -153,7 +161,25 @@ jobs:
           git add k8s/
           # ⚠️ [skip ci] 必须有：否则这次回写提交会再触发一轮流水线，形成无限循环
           git commit -m "chore(deploy): bump image to $TAG [skip ci]"
-          git push
+          # 推送重试：远端可能被别的东西推过（并发 run、人工提交）。
+          # 先 fetch + rebase 再推，最多试 5 次 —— 回写 tag 这种事失败一次
+          # 就意味着集群镜像不更新，不能只推一次听天由命。
+          for i in 1 2 3 4 5; do
+            git fetch origin main
+            if ! git rebase origin/main; then
+              git rebase --abort
+              echo "rebase 冲突，跳过这次重试"
+              sleep 5
+              continue
+            fi
+            if git push; then
+              echo "tag 已推送（第 $i 次尝试）"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::回写 tag 连续 5 次失败，请检查仓库权限或并发冲突"
+          exit 1
           echo "已提交，Argo CD 会在下一轮 reconciliation 时同步"
 
       - name: 等待 Argo CD 同步并滚动更新完成

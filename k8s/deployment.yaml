@@ -6,15 +6,16 @@ metadata:
   namespace: radar
   labels:
     app.kubernetes.io/name: radar
-  spec:
-    # 两个副本：数据在 PostgreSQL 里，多副本共享同一份数据，HPA 才有意义
-    replicas: 2
-    # 存储换成 PG 之后就不再抢 RWO 卷了，可以用滚动更新（原来必须 Recreate）
-    strategy:
-      type: RollingUpdate
-      rollingUpdate:
-        maxSurge: 1
-        maxUnavailable: 0
+spec:
+  # 两个副本：数据在 PostgreSQL 里，多副本共享同一份数据，HPA 才有意义
+  replicas: 2
+  # 存储换成 PG 之后就不再抢 RWO 卷了，可以用滚动更新（原来必须 Recreate，
+  # 因为新 Pod 会卡在「等旧 Pod 释放 ReadWriteOnce 卷」）
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: radar
@@ -28,23 +29,21 @@ metadata:
         runAsUser: 10001
       containers:
         - name: radar
-          image: ghcr.io/lilikk888/free-for-dev-radar:sha-29e0acf
+          image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
           imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 8000
-            env:
-              - name: RADAR_DB_PATH
-                value: /data/radar.db
-            # 配了 RADAR_DB_URL 就用 PostgreSQL（多副本的前提）；
-            # 没配这个 Secret 时 optional 生效 → 回退到 SQLite，不影响启动。
-            envFrom:
-              - secretRef:
-                  name: radar-pg
-                  optional: true
-          volumeMounts:
-            - name: data
-              mountPath: /data
+          env:
+            # 只在没配 RADAR_DB_URL 时才起作用（回退到本地 SQLite）
+            - name: RADAR_DB_PATH
+              value: /data/radar.db
+          # 配了 RADAR_DB_URL 就用 PostgreSQL（多副本的前提）。
+          # optional: true —— 没建这个 Secret 时不会卡住启动，自动回退 SQLite。
+          envFrom:
+            - secretRef:
+                name: radar-pg
+                optional: true
           resources:
             requests:
               cpu: 20m
