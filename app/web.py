@@ -1,4 +1,4 @@
-"""只读 HTTP 层：给页面用的 JSON API + 静态首页 + Prometheus 指标端点。"""
+"""只读 HTTP 层：中文检索 API + 静态首页 + Prometheus 指标端点。"""
 
 from __future__ import annotations
 
@@ -8,16 +8,39 @@ from typing import Any
 from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import FileResponse
 
+from . import data_curated
 from . import db
 from . import metrics as metrics_mod
+from . import search as search_mod
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-app = FastAPI(title="free-for-dev radar", version="0.1.0")
+app = FastAPI(title="免费资源雷达", version="0.2.0")
 
 # 已知路由的固定清单。指标标签必须是有界的，否则随便一个扫描器
 # 打一堆 /xxx 进来就能把 Prometheus 的标签基数打爆。
-_KNOWN_PATHS = ("/", "/healthz", "/metrics", "/api/changes", "/api/snapshots", "/api/stats")
+_KNOWN_PATHS = (
+    "/", "/healthz", "/metrics", "/api/changes", "/api/snapshots", "/api/stats",
+    "/api/search", "/api/categories", "/api/curated", "/api/tags",
+)
+
+
+def _foreign_rows() -> list[dict]:
+    """取最近一次快照里的全部条目（免费清单的原始数据）。"""
+    conn = db.connect()
+    try:
+        latest = conn.execute("SELECT MAX(id) AS id FROM snapshots").fetchone()["id"]
+        if latest is None:
+            return []
+        return [
+            dict(row)
+            for row in conn.execute(
+                "SELECT entry_key, category, name, url, description FROM entries WHERE snapshot_id = ?",
+                (latest,),
+            )
+        ]
+    finally:
+        conn.close()
 
 
 def _path_label(request: Request) -> str:
@@ -54,6 +77,64 @@ def prometheus_metrics() -> Response:
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/search")
+def api_search(
+    q: str = Query("", description="中文需求，如「免费的大模型 API」「图床」"),
+    cat: str | None = Query(None, description="按精选分类过滤"),
+    tags: str | None = Query(None, description="逗号分隔的标签，如 need_id,cn_ok"),
+    limit: int = Query(60, ge=1, le=300),
+) -> dict[str, Any]:
+    """核心接口：把中文需求翻译成检索条件，返回精选 + 收录两层结果。"""
+    tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()]
+    return search_mod.search(
+        query=q,
+        cat=cat,
+        tags=tag_list,
+        foreign_rows=_foreign_rows(),
+        limit=limit,
+    )
+
+
+@app.get("/api/categories")
+def api_categories(q: str = Query("", description="给定时按相关度排序")) -> dict[str, Any]:
+    """精选分类清单（带条目数），首页的分类入口用这个渲染。"""
+    counts: dict[str, int] = {}
+    for e in data_curated.as_list():
+        counts[e["category"]] = counts.get(e["category"], 0) + 1
+
+    guessed = search_mod.guess_categories(q) if q else []
+    cats = []
+    for key, name in data_curated.CATEGORIES:
+        cats.append({"key": key, "name": name, "count": counts.get(key, 0)})
+    if guessed:
+        order = {k: i for i, k in enumerate(guessed)}
+        cats.sort(key=lambda c: order.get(c["key"], 999))
+    return {"categories": cats, "guessed": guessed}
+
+
+@app.get("/api/curated")
+def api_curated(cat: str | None = None) -> dict[str, Any]:
+    """全部人工精选条目（供页面做客户端筛选/收藏）。"""
+    items = [e for e in data_curated.as_list() if not cat or e["category"] == cat]
+    return {"count": len(items), "items": items}
+
+
+@app.get("/api/tags")
+def api_tags() -> dict[str, Any]:
+    """可用标签及其含义（页面上给用户解释「需实名」「国内直连」是什么意思）。"""
+    return {
+        "tags": [
+            {"key": "no_card", "name": "免信用卡", "desc": "注册不需要绑银行卡"},
+            {"key": "need_card", "name": "需绑卡", "desc": "要绑卡验证（多数不扣费，但务必留意）"},
+            {"key": "need_id", "name": "需实名", "desc": "需要实名认证（国内平台基本都有）"},
+            {"key": "cn_ok", "name": "国内直连", "desc": "国内网络可直接访问，无需梯子"},
+            {"key": "cn_partial", "name": "部分可用", "desc": "能用但速度一般，或部分功能受限"},
+            {"key": "cn_no", "name": "需梯子", "desc": "国内直接访问困难"},
+            {"key": "permanent", "name": "长期免费", "desc": "不是限时赠送，可长期使用"},
+        ]
+    }
 
 
 @app.get("/api/changes")
@@ -120,4 +201,11 @@ def stats() -> dict[str, Any]:
 
 @app.get("/")
 def index() -> FileResponse:
+    """首页：中文需求检索（「我需要什么 → 有没有免费的」）。"""
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/changes")
+def changes_page() -> FileResponse:
+    """次要页面：上游清单的变更历史（原「变更雷达」视图，保留作为附属能力）。"""
+    return FileResponse(STATIC_DIR / "changes.html")

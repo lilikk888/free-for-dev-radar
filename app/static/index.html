@@ -1,165 +1,223 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>free-for-dev 变更雷达</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>免费资源雷达 · 找免费的云服务和大模型额度</title>
 <style>
-  :root {
-    --bg: #f7f7f5; --panel: #ffffff; --line: #e3e2dd;
-    --text: #2c2c2a; --muted: #5f5e5a; --hint: #8a8880;
-    --added: #1d9e75; --removed: #d85a30; --updated: #185fa5;
+  :root{
+    --bg:#f5f7fa; --card:#fff; --fg:#1f2329; --muted:#8a9099; --line:#e8eaed;
+    --brand:#2563eb; --brand-soft:#eff4ff; --ok:#0a8f4d; --ok-soft:#eafaf0;
+    --warn:#b45309; --warn-soft:#fff8e6; --danger:#d93838; --danger-soft:#fdeeee;
   }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 32px 20px 60px; background: var(--bg); color: var(--text);
-    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
-  }
-  .wrap { max-width: 920px; margin: 0 auto; }
-  header h1 { font-size: 20px; font-weight: 500; margin: 0 0 6px; }
-  header p { color: var(--muted); margin: 0 0 24px; font-size: 13px; }
-  .stats { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 24px; }
-  .stat {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-    padding: 14px 18px; min-width: 130px;
-  }
-  .stat .k { color: var(--hint); font-size: 12px; }
-  .stat .v { font-size: 22px; font-weight: 500; margin-top: 2px; }
-  .filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-  .filters button {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-    padding: 6px 14px; font-size: 13px; cursor: pointer; color: var(--muted);
-    font-family: inherit;
-  }
-  .filters button[aria-pressed="true"] { border-color: var(--text); color: var(--text); }
-  .card {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-    padding: 14px 18px; margin-bottom: 10px;
-  }
-  .card .top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-  .tag {
-    font-size: 11px; padding: 2px 8px; border-radius: 999px;
-    border: 1px solid currentColor; flex: none;
-  }
-  .tag.added { color: var(--added); }
-  .tag.removed { color: var(--removed); }
-  .tag.updated { color: var(--updated); }
-  .card .name { font-weight: 500; }
-  .card .path { color: var(--hint); font-size: 12px; }
-  .card .when { margin-left: auto; color: var(--hint); font-size: 12px; }
-  .diff { margin-top: 10px; font-size: 13px; }
-  .diff .row { display: flex; gap: 8px; padding: 3px 0; }
-  .diff .mark { flex: none; width: 14px; color: var(--hint); }
-  .diff .old { color: var(--removed); text-decoration: line-through; text-decoration-color: #f0b3a0; }
-  .diff .new { color: var(--added); }
-  .empty { color: var(--hint); padding: 40px 0; text-align: center; }
-  a { color: var(--updated); }
-  footer { margin-top: 32px; color: var(--hint); font-size: 12px; }
-  footer code { background: #efeee9; padding: 1px 5px; border-radius: 4px; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-size:15px;line-height:1.7;
+       font-family:-apple-system,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif}
+  a{color:var(--brand);text-decoration:none} a:hover{text-decoration:underline}
+  .wrap{max-width:1000px;margin:0 auto;padding:28px 20px 80px}
+  header h1{margin:0 0 6px;font-size:26px;letter-spacing:-.3px}
+  header p{margin:0;color:var(--muted);font-size:14px}
+  .searchbar{display:flex;gap:10px;margin:22px 0 10px}
+  .searchbar input{flex:1;padding:14px 16px;font-size:16px;border:1.5px solid var(--line);
+    border-radius:10px;background:var(--card);outline:none;font-family:inherit}
+  .searchbar input:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
+  .searchbar button{padding:0 24px;border:0;border-radius:10px;background:var(--brand);color:#fff;
+    font-size:15px;font-weight:600;cursor:pointer;font-family:inherit}
+  .searchbar button:hover{background:#1d4ed8}
+  .hints{color:var(--muted);font-size:13px;margin-bottom:18px}
+  .hints b{color:var(--brand);cursor:pointer;font-weight:500}
+  .hints b:hover{text-decoration:underline}
+  .filters{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 20px}
+  .chip{padding:6px 13px;border:1px solid var(--line);border-radius:999px;background:var(--card);
+    cursor:pointer;font-size:13px;color:#4a5058;user-select:none}
+  .chip:hover{border-color:var(--brand);color:var(--brand)}
+  .chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
+  .cats{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin:16px 0 26px}
+  .cat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px 15px;cursor:pointer}
+  .cat:hover{border-color:var(--brand);box-shadow:0 2px 10px rgba(37,99,235,.08)}
+  .cat .t{font-weight:600;font-size:14.5px}
+  .cat .n{color:var(--muted);font-size:12.5px;margin-top:2px}
+  h2.sec{font-size:17px;margin:28px 0 12px;padding-left:10px;border-left:4px solid var(--brand)}
+  h2.sec small{font-weight:400;color:var(--muted);font-size:13px;margin-left:8px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:12px}
+  .card h3{margin:0 0 6px;font-size:16.5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .card .cat-tag{font-size:12px;font-weight:500;color:var(--brand);background:var(--brand-soft);
+    padding:2px 9px;border-radius:6px}
+  .card .sum{margin:6px 0 10px;color:#3a4048}
+  .kv{font-size:14px;margin:5px 0;color:#3a4048}
+  .kv b{color:var(--fg);font-weight:600}
+  .tags{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px}
+  .tag{font-size:12.5px;padding:2px 9px;border-radius:6px;background:#f2f4f7;color:#5a6270}
+  .tag.ok{background:var(--ok-soft);color:var(--ok)}
+  .tag.warn{background:var(--warn-soft);color:var(--warn)}
+  .tag.bad{background:var(--danger-soft);color:var(--danger)}
+  .tips{font-size:13.5px;color:var(--warn);background:var(--warn-soft);border-radius:8px;padding:8px 12px;margin-top:8px}
+  .go{display:inline-block;margin-top:10px;font-size:13.5px;font-weight:500}
+  details{margin-top:8px}
+  summary{cursor:pointer;font-size:13.5px;color:var(--muted)}
+  .ffd{border-top:1px dashed var(--line);padding:9px 0;font-size:13.5px}
+  .ffd .cn{color:var(--muted);font-size:12.5px}
+  .empty{color:var(--muted);background:var(--card);border:1px dashed var(--line);
+    border-radius:12px;padding:26px;text-align:center}
+  footer{margin-top:40px;color:var(--muted);font-size:12.5px;text-align:center;line-height:2}
+  .spinner{color:var(--muted);font-size:14px;padding:14px 0}
+  .stat{display:inline-block;background:var(--card);border:1px solid var(--line);border-radius:8px;
+    padding:4px 11px;font-size:13px;color:var(--muted);margin-right:8px}
+  .stat b{color:var(--fg)}
 </style>
 </head>
 <body>
 <div class="wrap">
+
   <header>
-    <h1>free-for-dev 变更雷达</h1>
-    <p>盯着 <a href="https://github.com/ripienaar/free-for-dev">ripienaar/free-for-dev</a> 的 README，把新增、下线、以及<strong>免费额度调整</strong>扒出来。</p>
+    <h1>免费资源雷达</h1>
+    <p>输入你需要的资源，帮你找到可以免费用的方案 —— 中文说明、免费额度、要不要绑卡、国内能不能用，一次看清。</p>
   </header>
 
-  <div class="stats" id="stats"></div>
-
-  <div class="filters" id="filters">
-    <button data-type="" aria-pressed="true">全部</button>
-    <button data-type="added" aria-pressed="false">新增</button>
-    <button data-type="removed" aria-pressed="false">下线</button>
-    <button data-type="updated" aria-pressed="false">额度变更</button>
+  <div class="searchbar">
+    <input id="q" type="search" placeholder="我想找…（例如：免费的大模型 API、图床、免费服务器）" autocomplete="off">
+    <button id="go">搜索</button>
+  </div>
+  <div class="hints">
+    试试：
+    <b data-q="免费的大模型 API">免费的大模型 API</b> ·
+    <b data-q="免费服务器">免费服务器</b> ·
+    <b data-q="图床">图床</b> ·
+    <b data-q="免费数据库">免费数据库</b> ·
+    <b data-q="内网穿透">内网穿透</b> ·
+    <b data-q="发邮件">发邮件</b>
   </div>
 
-  <div id="list"><div class="empty">加载中…</div></div>
+  <div class="filters" id="filters"></div>
+  <div class="cats" id="cats"></div>
+
+  <div id="out"></div>
 
   <footer>
-    数据存在 SQLite 里，由 CronJob 定时调用 <code>python -m app.cli collect</code> 采集。
+    <div><span class="stat">精选条目 <b id="s-curated">–</b></span>
+         <span class="stat">收录条目 <b id="s-ffd">–</b></span>
+         <span class="stat">最近更新 <b id="s-when">–</b></span></div>
+    <div>「精选」= 人工核实过的条目（国内平台为主，带免费额度和注意事项）；
+         「收录」= 来自开源清单 free-for-dev 的英文条目（覆盖海外服务，未逐条核实）。</div>
+    <div>免费政策随时会变，注册前请以官网为准 ·
+         <a href="/api/stats">数据接口</a> · <a href="/changes">最近变化</a></div>
   </footer>
 </div>
 
 <script>
-const LABEL = { added: "新增", removed: "下线", updated: "额度变更" };
+const $ = s => document.querySelector(s);
+const state = { q: "", cat: null, tags: [] };
 
-async function loadStats() {
-  const res = await fetch("/api/stats");
-  const s = await res.json();
-  const byType = s.changes_by_type || {};
-  const cards = [
-    ["当前收录条目", s.current_entries ?? 0],
-    ["新增", byType.added || 0],
-    ["下线", byType.removed || 0],
-    ["额度变更", byType.updated || 0],
-    ["最近采集", s.last_snapshot ? s.last_snapshot.fetched_at.replace("T", " ").replace("+00:00", " UTC") : "还没采集过"],
-  ];
-  document.getElementById("stats").innerHTML = cards
-    .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`)
-    .join("");
-}
+const TAG_TEXT = {
+  no_card: "免信用卡", need_card: "需绑卡", need_id: "需实名",
+  cn_ok: "国内直连", cn_partial: "部分可用", cn_no: "需梯子",
+  permanent: "长期免费", limited: "限时赠送",
+};
+const TAG_STYLE = {
+  no_card: "ok", cn_ok: "ok", permanent: "ok",
+  need_card: "warn", cn_no: "warn", limited: "warn",
+};
 
-function renderItems(items) {
-  const list = document.getElementById("list");
-  if (!items.length) {
-    list.innerHTML = '<div class="empty">还没有变更记录。等下一次采集跑完就有数据了。</div>';
-    return;
-  }
-  list.innerHTML = items.map((it) => {
-    const path = [it.category, it.name].filter(Boolean).join(" · ");
-    let diff = "";
-    if (it.change_type === "updated") {
-      diff = `<div class="diff">
-        <div class="row"><span class="mark">−</span><span class="old">${escapeHtml(it.old_description || "(空)")}</span></div>
-        <div class="row"><span class="mark">+</span><span class="new">${escapeHtml(it.new_description || "(空)")}</span></div>
-      </div>`;
-    } else if (it.change_type === "added") {
-      diff = `<div class="diff"><div class="row"><span class="mark">+</span><span class="new">${escapeHtml(it.new_description || "(无描述)")}</span></div></div>`;
-    } else {
-      diff = `<div class="diff"><div class="row"><span class="mark">−</span><span class="old">${escapeHtml(it.old_description || "(无描述)")}</span></div></div>`;
-    }
-    const name = it.url
-      ? `<a href="${escapeHtml(it.url)}" target="_blank" rel="noopener" class="name">${escapeHtml(it.name)}</a>`
-      : `<span class="name">${escapeHtml(it.name)}</span>`;
-    return `<div class="card">
-      <div class="top">
-        <span class="tag ${it.change_type}">${LABEL[it.change_type] || it.change_type}</span>
-        ${name}
-        <span class="path">${escapeHtml(path)}</span>
-        <span class="when">${(it.detected_at || "").replace("T", " ").replace("+00:00", " UTC")}</span>
-      </div>
-      ${diff}
-    </div>`;
-  }).join("");
-}
+function esc(s){ return (s||"").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])); }
 
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (c) => (
-    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
-  ));
-}
-
-let activeType = "";
-async function loadChanges() {
-  const url = activeType ? `/api/changes?limit=200&change_type=${activeType}` : "/api/changes?limit=200";
-  const res = await fetch(url);
-  const data = await res.json();
-  renderItems(data.items || []);
-}
-
-document.getElementById("filters").addEventListener("click", (event) => {
-  const button = event.target.closest("button");
-  if (!button) return;
-  activeType = button.dataset.type;
-  document.querySelectorAll("#filters button").forEach((b) => {
-    b.setAttribute("aria-pressed", String(b === button));
+const FILTERS = ["no_card","need_id","cn_ok","permanent"];
+function renderFilters(){
+  $("#filters").innerHTML = FILTERS.map(k =>
+    `<span class="chip ${state.tags.includes(k)?"on":""}" data-tag="${k}">${TAG_TEXT[k]}</span>`
+  ).join("");
+  $("#filters").querySelectorAll(".chip").forEach(el => el.onclick = () => {
+    const t = el.dataset.tag;
+    state.tags = state.tags.includes(t) ? state.tags.filter(x=>x!==t) : state.tags.concat(t);
+    renderFilters(); run();
   });
-  loadChanges();
+}
+
+async function renderCats(){
+  const r = await fetch("/api/categories" + (state.q ? "?q="+encodeURIComponent(state.q) : ""));
+  const d = await r.json();
+  $("#cats").innerHTML = d.categories.map(c =>
+    `<div class="cat" data-cat="${c.key}" style="${state.cat===c.key?"border-color:var(--brand);background:var(--brand-soft)":""}">
+       <div class="t">${esc(c.name)}</div><div class="n">${c.count} 条精选</div></div>`
+  ).join("");
+  $("#cats").querySelectorAll(".cat").forEach(el => el.onclick = () => {
+    state.cat = state.cat === el.dataset.cat ? null : el.dataset.cat;
+    renderCats(); run();
+  });
+}
+
+function cardHTML(e){
+  // 标签由后端统一换算成标准 key（no_card / cn_ok / permanent …），前端只负责翻译
+  const tags = e.tags || [];
+  const tagHTML = tags.map(t =>
+    `<span class="tag ${TAG_STYLE[t]||""}">${esc(TAG_TEXT[t]||t)}</span>`).join("");
+  return `<div class="card">
+    <h3>${esc(e.name)} <span class="cat-tag">${esc(e.category_cn||"")}</span>
+        ${e.expiry ? `<span class="tag">${esc(e.expiry)}</span>` : ""}</h3>
+    <div class="sum">${esc(e.summary)}</div>
+    ${e.quota ? `<div class="kv"><b>免费额度：</b>${esc(e.quota)}</div>` : ""}
+    <div class="tags">${tagHTML}</div>
+    ${e.tips ? `<div class="tips">注意：${esc(e.tips)}</div>` : ""}
+    ${e.url ? `<a class="go" href="${esc(e.url)}" target="_blank" rel="noopener">打开官网 →</a>` : ""}
+  </div>`;
+}
+
+function foreignHTML(list){
+  if(!list.length) return "";
+  return `<details><summary>展开 ${list.length} 条来自 free-for-dev 的英文条目（未人工核实）</summary>
+    ${list.map(f => `<div class="ffd">
+      <div><a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.name)}</a>
+        <span class="cn">· ${esc(f.category_cn||"")}</span></div>
+      <div class="cn">${esc((f.summary||"").slice(0,180))}</div></div>`).join("")}
+  </details>`;
+}
+
+async function run(){
+  const out = $("#out");
+  out.innerHTML = `<div class="spinner">查询中…</div>`;
+  const p = new URLSearchParams();
+  if(state.q) p.set("q", state.q);
+  if(state.cat) p.set("cat", state.cat);
+  if(state.tags.length) p.set("tags", state.tags.join(","));
+  let d;
+  try { d = await (await fetch("/api/search?"+p.toString())).json(); }
+  catch(e){ out.innerHTML = `<div class="empty">查询失败，请刷新重试。</div>`; return; }
+
+  const title = state.q ? `「${esc(state.q)}」的搜索结果` : (state.cat ? "本分类精选" : "全部精选");
+  let html = `<h2 class="sec">${title}<small>精选 ${d.counts.curated} 条${
+      state.q ? `，另收录 ${d.counts.foreign} 条` : ""}</small></h2>`;
+
+  if(!d.curated.length && !d.foreign.length){
+    html += `<div class="empty">没找到匹配的。<br>换个说法试试，比如「数据库」「图床」「免费 GPU」「发邮件」。</div>`;
+  } else {
+    if(d.curated.length) html += d.curated.map(cardHTML).join("");
+    html += foreignHTML(d.foreign);
+  }
+  out.innerHTML = html;
+}
+
+async function stats(){
+  try{
+    const d = await (await fetch("/api/stats")).json();
+    $("#s-ffd").textContent = (d.current_entries ?? "–");
+    if(d.last_snapshot && d.last_snapshot.fetched_at){
+      $("#s-when").textContent = new Date(d.last_snapshot.fetched_at)
+        .toLocaleString("zh-CN", {hour12:false, month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit"});
+    }
+    const c = await (await fetch("/api/curated")).json();
+    $("#s-curated").textContent = c.count;
+  }catch(e){}
+}
+
+$("#go").onclick = () => { state.q = $("#q").value.trim(); state.cat = null; renderCats(); run(); };
+$("#q").addEventListener("keydown", e => { if(e.key === "Enter") $("#go").click(); });
+document.querySelectorAll(".hints b").forEach(el => el.onclick = () => {
+  $("#q").value = el.dataset.q; $("#go").click();
 });
 
-loadStats();
-loadChanges();
+const preset = new URLSearchParams(location.search).get("q");
+if(preset){ $("#q").value = preset; state.q = preset; }
+
+renderFilters(); renderCats(); stats(); run();
 </script>
 </body>
 </html>
