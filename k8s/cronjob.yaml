@@ -26,22 +26,22 @@ spec:
             runAsUser: 10001
           containers:
             - name: collect
-              image: ghcr.io/lilikk888/free-for-dev-radar:sha-6102d75
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
               imagePullPolicy: Always
               command: ["python", "-m", "app.cli", "collect"]
               env:
                 - name: RADAR_DB_PATH
                   value: /data/radar.db
-              # 数据库连接串来自 Secret：配了就切 PostgreSQL，没配回退 SQLite
-              envFrom:
-                - secretRef:
-                    name: radar-pg
-                    optional: true
                 # 采集是跑几秒就退出的短命进程，Prometheus 根本抓不到它，
                 # 所以把本次结果「推」到 Pushgateway 中转。
                 # 没装 Pushgateway 也不影响采集：推送失败会被吞掉（见 app/metrics.py）。
                 - name: RADAR_PUSHGATEWAY_URL
                   value: http://pushgateway.monitoring.svc.cluster.local:9091
+              # 数据库连接串来自 Secret：配了就切 PostgreSQL，没配回退 SQLite
+              envFrom:
+                - secretRef:
+                    name: radar-pg
+                    optional: true
               resources:
                 requests:
                   cpu: 20m
@@ -80,19 +80,19 @@ spec:
             runAsUser: 10001
           containers:
             - name: check-links
-              image: ghcr.io/lilikk888/free-for-dev-radar:sha-6102d75
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
               imagePullPolicy: Always
               command: ["python", "-m", "app.cli", "check-links"]
               env:
                 - name: RADAR_DB_PATH
                   value: /data/radar.db
+                - name: RADAR_PUSHGATEWAY_URL
+                  value: http://pushgateway.monitoring.svc.cluster.local:9091
               # 数据库连接串来自 Secret：配了就切 PostgreSQL，没配回退 SQLite
               envFrom:
                 - secretRef:
                     name: radar-pg
                     optional: true
-                - name: RADAR_PUSHGATEWAY_URL
-                  value: http://pushgateway.monitoring.svc.cluster.local:9091
               resources:
                 requests:
                   cpu: 20m
@@ -138,7 +138,7 @@ spec:
             runAsUser: 10001
           containers:
             - name: digest
-              image: ghcr.io/lilikk888/free-for-dev-radar:sha-6102d75
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
               imagePullPolicy: Always
               command: ["python", "-m", "app.cli", "digest"]
               env:

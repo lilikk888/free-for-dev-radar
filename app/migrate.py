@@ -38,11 +38,30 @@ def _cols(conn_sqlite: sqlite3.Connection, table: str) -> list[str]:
     return [r[1] for r in conn_sqlite.execute(f"PRAGMA table_info({table})")]
 
 
+def _table_exists(conn_sqlite: sqlite3.Connection, table: str) -> tuple[bool, str | None]:
+    """判断源库里有没有这张表，**并保留真实的失败原因**。
+
+    ⚠️ 这里踩过一个坑：最初只写了 `try: PRAGMA table_info ... except DatabaseError:
+    skipped("源库里没有这张表")`，结果把一个完全不同的问题（SQLite 是 WAL 模式，
+    只读挂载下打开失败）误报成"表不存在"，排查时被误导了很久。
+    现在把底层异常信息一起带出来。
+    """
+    try:
+        rows = list(conn_sqlite.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ))
+        return bool(rows), None
+    except sqlite3.DatabaseError as exc:
+        return False, f"打开源库失败: {exc}"
+
+
 def migrate(source: str | Path) -> dict[str, Any]:
     src_path = Path(source)
     if not src_path.exists():
         raise FileNotFoundError(f"源库不存在: {src_path}")
 
+    # 提示：SQLite 若处于 WAL 模式，**只读挂载会打开失败**（WAL 恢复需要写权限）。
+    # 集群里跑迁移时，先把文件复制到可写目录再迁（见 k8s 里的一次性 Job）。
     src = sqlite3.connect(src_path)
     src.row_factory = sqlite3.Row
     dst = db.connect()
@@ -50,11 +69,11 @@ def migrate(source: str | Path) -> dict[str, Any]:
     report: dict[str, Any] = {"source": str(src_path), "tables": {}}
     try:
         for table, pk, upsert in TABLES:
-            try:
-                cols = _cols(src, table)
-            except sqlite3.DatabaseError:
-                report["tables"][table] = {"skipped": "源库里没有这张表"}
+            exists, reason = _table_exists(src, table)
+            if not exists:
+                report["tables"][table] = {"skipped": reason or "源库里没有这张表"}
                 continue
+            cols = _cols(src, table)
             rows = [dict(r) for r in src.execute(f"SELECT * FROM {table}")]
             if not rows:
                 report["tables"][table] = {"rows": 0, "inserted": 0}
