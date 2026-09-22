@@ -24,4 +24,4 @@ images:
   - name: ghcr.io/lilikk888/free-for-dev-radar
     newName: ghcr.io/lilikk888/free-for-dev-radar
     # 由 CI 自动回写，不要手改
-    newTag: sha-93f241e
+    newTag: sha-78564eb
