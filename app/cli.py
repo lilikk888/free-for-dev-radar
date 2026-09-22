@@ -30,6 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
     dg = sub.add_parser("digest", help="生成并发送周报邮件")
     dg.add_argument("--print-only", action="store_true", help="只打印正文不发信")
 
+    mg = sub.add_parser("migrate", help="把 SQLite 里的数据迁移到 PostgreSQL")
+    mg.add_argument("--from", dest="source", required=True, help="源 SQLite 文件路径")
+
     return parser
 
 
@@ -100,6 +103,21 @@ def _cmd_digest(print_only: bool) -> int:
     return 0 if (ok or "未配置 SMTP" in msg) else 2
 
 
+def _cmd_migrate(source: str) -> int:
+    from . import database, migrate
+
+    if not database.using_postgres():
+        print("目标库不是 PostgreSQL（没配 RADAR_DB_URL），迁移没有意义", file=sys.stderr)
+        return 2
+    try:
+        report = migrate.migrate(source)
+    except Exception as exc:
+        print(f"迁移失败: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -109,6 +127,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_check_links(args.limit)
     if args.command == "digest":
         return _cmd_digest(args.print_only)
+    if args.command == "migrate":
+        return _cmd_migrate(args.source)
     return 1  # pragma: no cover - argparse 已经拦截
 
 

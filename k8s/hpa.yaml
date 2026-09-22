@@ -1,0 +1,43 @@
+---
+# 应用的水平自动扩缩容（HPA）。
+#
+# 前置条件：metrics-server 已安装（提供 resource metrics API）。
+# 没有它，HPA 会一直显示 `cpu: <unknown>` 并报
+#   failed to get cpu utilization: no metrics returned from resource metrics API
+# 这是最常见的 HPA 不工作原因，不是 HPA 本身的问题。
+#
+# 为什么现在才能真正用起来：
+#   之前存储是单文件 SQLite + ReadWriteOnce 卷 → 应用**没法跨节点跑多副本**
+#   （第二个 Pod 挂不上同一个卷）。换成 PostgreSQL 之后，
+#   应用是无状态的，扩到几个副本都行 —— HPA 才有意义。
+#
+# 阈值定 70% 而不是 50%：这个应用的常驻 CPU 很低（约 2 毫核），
+# 定太低会因为几次请求抖动频繁扩缩容。
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: radar
+  namespace: radar
+  labels:
+    app.kubernetes.io/name: radar
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: radar
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      # 扩容快一点：宁可多开一个 Pod，也别让用户等
+      stabilizationWindowSeconds: 30
+    scaleDown:
+      # 缩容慢一点：避免抖动（窗口内的最大推荐值）
+      stabilizationWindowSeconds: 300

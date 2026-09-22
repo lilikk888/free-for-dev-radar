@@ -12,12 +12,12 @@
 from __future__ import annotations
 
 import hashlib
-import sqlite3
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
+from .database import Connection
 from . import config
 from .parser import Entry, parse
 
@@ -54,13 +54,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _latest_snapshot_id(conn: sqlite3.Connection) -> int | None:
+def _latest_snapshot_id(conn: Connection) -> int | None:
     row = conn.execute("SELECT id FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
     return row["id"] if row else None
 
 
 def _diff(
-    conn: sqlite3.Connection, previous_snapshot_id: int, entries: list[Entry]
+    conn: Connection, previous_snapshot_id: int, entries: list[Entry]
 ) -> tuple[list[tuple[Any, ...]], dict[str, int]]:
     """返回 (待插入的变更行, 按类型统计的变更数)。"""
     previous = {
@@ -116,7 +116,7 @@ def _diff(
     return rows, by_type
 
 
-def collect(conn: sqlite3.Connection, markdown: str | None = None) -> dict[str, Any]:
+def collect(conn: Connection, markdown: str | None = None) -> dict[str, Any]:
     """执行一次采集。返回本次结果摘要。"""
     markdown = fetch_source() if markdown is None else markdown
     entries = parse(markdown)
@@ -132,11 +132,16 @@ def collect(conn: sqlite3.Connection, markdown: str | None = None) -> dict[str, 
         changes, changes_by_type = _diff(conn, previous_snapshot_id, entries)
 
     timestamp = _now()
-    cursor = conn.execute(
-        "INSERT INTO snapshots (fetched_at, entry_count) VALUES (?, ?)",
+    # ⭐ 用 RETURNING id 而不是 cursor.lastrowid：
+    # lastrowid 是 SQLite 的方言，PostgreSQL 上没有等价语义。
+    # RETURNING 两边都支持（SQLite ≥ 3.35 / PG 一直有），
+    # 这样迁移到 PG 时这段代码一行都不用改（实测踩过：切库后报
+    # AttributeError: '_Cursor' object has no attribute 'lastrowid'）。
+    row = conn.execute(
+        "INSERT INTO snapshots (fetched_at, entry_count) VALUES (?, ?) RETURNING id",
         (timestamp, len(entries)),
-    )
-    snapshot_id = cursor.lastrowid
+    ).fetchone()
+    snapshot_id = row["id"] if isinstance(row, dict) or hasattr(row, "keys") else row[0]
     conn.executemany(
         """INSERT INTO entries
                (snapshot_id, entry_key, category, parent, name, url, description, fingerprint)

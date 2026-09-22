@@ -1,0 +1,102 @@
+---
+# PostgreSQL —— 把存储从「单文件 SQLite」换成真正能多副本共享的数据库。
+#
+# 为什么必须换（这是批次 2 里最关键的一步）：
+#   SQLite 是**单文件**，挂在 ReadWriteOnce 的 PVC 上。
+#   RWO 卷只能被同一个节点上的 Pod 挂载 → 应用**没法扩到多个副本**（跨节点会挂不上卷）。
+#   没有多副本，HPA 就没有意义（扩出来的第二个 Pod 起不来）。
+#
+#   换成 PG 之后：无状态应用 + 共享数据库 → 想要几个副本就几个副本。
+#
+# 单副本 PG 对这个项目完全够用（个人工具、写入量极低）；
+# 生产上如果要高可用，应该用 PG operator（如 CloudNativePG）做流复制 + 自动故障转移。
+#
+# ⚠️ 密码不进 Git。创建方式：
+#   kubectl -n radar create secret generic radar-pg \
+#     --from-literal=POSTGRES_PASSWORD="$(openssl rand -hex 16)" \
+#     --from-literal=RADAR_DB_URL="postgresql://radar:<上面的密码>@radar-postgres:5432/radar"
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: radar-postgres
+  namespace: radar
+  labels:
+    app.kubernetes.io/name: radar-postgres
+spec:
+  serviceName: radar-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: radar-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: radar-postgres
+    spec:
+      securityContext:
+        # postgres 官方镜像自带 postgres 用户（uid 999）
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: docker.io/library/postgres:17-alpine
+          ports:
+            - name: pg
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: radar
+            - name: POSTGRES_USER
+              value: radar
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: radar-pg
+                  key: POSTGRES_PASSWORD
+            # 数据目录放进子目录：PG 要求挂载点本身为空，而挂载根目录里通常有 lost+found，
+            # 直接用根目录会导致初始化失败（经典坑）
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "radar", "-d", "radar"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "radar", "-d", "radar"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: radar-postgres
+  namespace: radar
+  labels:
+    app.kubernetes.io/name: radar-postgres
+spec:
+  selector:
+    app.kubernetes.io/name: radar-postgres
+  ports:
+    - name: pg
+      port: 5432
+      targetPort: pg

@@ -2,3 +2,6 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 # /metrics 端点 + 指标定义（Web 侧暴露，CronJob 侧推 Pushgateway）
 prometheus-client>=0.21
+# PostgreSQL 驱动。只在配了 RADAR_DB_URL 时才真正用到；
+# 装 binary 版是为了省掉编译依赖（集群里构建镜像要快）
+psycopg[binary]>=3.2

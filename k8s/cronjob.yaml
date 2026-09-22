@@ -26,20 +26,22 @@ spec:
             runAsUser: 10001
           containers:
             - name: collect
-              image: ghcr.io/lilikk888/free-for-dev-radar:sha-b7ddaad
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
               imagePullPolicy: Always
               command: ["python", "-m", "app.cli", "collect"]
               env:
                 - name: RADAR_DB_PATH
                   value: /data/radar.db
+              # 数据库连接串来自 Secret：配了就切 PostgreSQL，没配回退 SQLite
+              envFrom:
+                - secretRef:
+                    name: radar-pg
+                    optional: true
                 # 采集是跑几秒就退出的短命进程，Prometheus 根本抓不到它，
                 # 所以把本次结果「推」到 Pushgateway 中转。
                 # 没装 Pushgateway 也不影响采集：推送失败会被吞掉（见 app/metrics.py）。
                 - name: RADAR_PUSHGATEWAY_URL
                   value: http://pushgateway.monitoring.svc.cluster.local:9091
-              volumeMounts:
-                - name: data
-                  mountPath: /data
               resources:
                 requests:
                   cpu: 20m
@@ -47,10 +49,6 @@ spec:
                 limits:
                   cpu: 300m
                   memory: 192Mi
-          volumes:
-            - name: data
-              persistentVolumeClaim:
-                claimName: radar-data
 ---
 # 每天巡检一次精选条目的官网链接，顺便同步「见过哪些条目」。
 #
@@ -82,17 +80,19 @@ spec:
             runAsUser: 10001
           containers:
             - name: check-links
-              image: ghcr.io/lilikk888/free-for-dev-radar:sha-b7ddaad
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
               imagePullPolicy: Always
               command: ["python", "-m", "app.cli", "check-links"]
               env:
                 - name: RADAR_DB_PATH
                   value: /data/radar.db
+              # 数据库连接串来自 Secret：配了就切 PostgreSQL，没配回退 SQLite
+              envFrom:
+                - secretRef:
+                    name: radar-pg
+                    optional: true
                 - name: RADAR_PUSHGATEWAY_URL
                   value: http://pushgateway.monitoring.svc.cluster.local:9091
-              volumeMounts:
-                - name: data
-                  mountPath: /data
               resources:
                 requests:
                   cpu: 20m
@@ -100,10 +100,6 @@ spec:
                 limits:
                   cpu: 300m
                   memory: 256Mi
-          volumes:
-            - name: data
-              persistentVolumeClaim:
-                claimName: radar-data
 ---
 # 每周一早上发一封周报：本周新收录 / 快过期的额度 / 链接挂了的条目。
 #
@@ -142,20 +138,22 @@ spec:
             runAsUser: 10001
           containers:
             - name: digest
-              image: ghcr.io/lilikk888/free-for-dev-radar:sha-b7ddaad
+              image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
               imagePullPolicy: Always
               command: ["python", "-m", "app.cli", "digest"]
               env:
                 - name: RADAR_DB_PATH
                   value: /data/radar.db
+              # 数据库连接串来自 Secret：配了就切 PostgreSQL，没配回退 SQLite
+              envFrom:
+                - secretRef:
+                    name: radar-pg
+                    optional: true
               envFrom:
                 # 可选：没建这个 Secret 时 Pod 起不来，所以用 optional
                 - secretRef:
                     name: radar-smtp
                     optional: true
-              volumeMounts:
-                - name: data
-                  mountPath: /data
               resources:
                 requests:
                   cpu: 20m
@@ -163,7 +161,3 @@ spec:
                 limits:
                   cpu: 200m
                   memory: 192Mi
-          volumes:
-            - name: data
-              persistentVolumeClaim:
-                claimName: radar-data

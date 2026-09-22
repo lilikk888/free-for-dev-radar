@@ -19,6 +19,8 @@ resources:
   - cronjob.yaml
   # 网络策略：默认拒绝入站 + 显式放行 ingress-nginx 与 Prometheus
   - networkpolicy.yaml
+  - hpa.yaml
+  - postgres.yaml
 
 images:
   - name: ghcr.io/lilikk888/free-for-dev-radar

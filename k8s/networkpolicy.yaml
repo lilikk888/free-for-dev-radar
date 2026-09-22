@@ -50,6 +50,33 @@ spec:
       ports:
         - protocol: TCP
           port: 8000
+---
+# PostgreSQL 的入站策略。
+#
+# ⚠️ 这个文件是「默认拒绝」策略的**必要配套**：
+# 上面的 radar-default-deny-ingress 把 radar 命名空间里**所有** Pod 的入站都拒了，
+# 包括后来才加的 PostgreSQL。不加这条，切换到 PG 之后应用会连不上数据库 ——
+# 而且症状会是「连接超时」，很容易误判成数据库没起来或密码错。
+#
+# 教训：**加默认拒绝策略之后，每新增一个组件都要回头补它的入站规则。**
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: radar-postgres-ingress
+  namespace: radar
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: radar-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    # 只允许同命名空间内的 Pod 连 5432（应用和 CronJob 都在这个命名空间）
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 5432
 
 # 说明：
 # - **出站不限制** —— 采集任务需要访问公网（free-for-dev.com），
