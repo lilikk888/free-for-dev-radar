@@ -140,11 +140,26 @@ SYNONYMS: dict[str, list[str]] = {
     "统计": ["analytics", "statistics", "events"],
     "身份": ["identity", "auth", "sso"],
     "备份": ["backup", "storage", "snapshot"],
+    # ⭐ 这几个是「中文没有空格」暴露出来的问题：
+    # 用户搜「学生免费」时，整串中文既不会命中英文正文，也不在标签里逐字出现，
+    # 结果 0 条（本地测试里带了空格的「学生 免费」却能搜到）。
+    # 解法：给中文词也建自同义词，让它能命中标签里的中文。
+    "学生": ["学生", "student", "education", "校园", "高校", "教育"],
+    "教育": ["教育", "学生", "education", "course"],
+    "校园": ["校园", "学生", "高校", "education"],
+    "高校": ["高校", "学生", "校园", "education"],
+    "羊毛": ["羊毛", "白嫖", "免费", "赠送", "free", "credit"],
+    "白嫖": ["白嫖", "羊毛", "免费", "赠送", "free", "credit"],
+    "赠送": ["赠送", "免费", "credit", "trial", "free"],
+    "额度": ["额度", "quota", "credit", "limit", "free"],
+    "试用": ["试用", "trial", "free"],
+    "开源": ["开源", "open source", "self-hosted"],
 }
 
 # ── 需求 → 推荐分类（首页「我想找…」按钮用，也给搜索结果做加权）────────
 NEED_HINTS: list[tuple[str, list[str]]] = [
-    ("ai-api", ["ai", "大模型", "llm", "gpt", "模型", "接口", "api", "tokens", "token", "羊毛"]),
+    ("student", ["学生", "校园", "高校", "教育", "student", "教育优惠"]),
+    ("ai-api", ["ai", "大模型", "llm", "gpt", "模型", "接口", "api", "tokens", "token", "羊毛", "白嫖"]),
     ("ai-compute", ["算力", "gpu", "显卡", "训练", "炼丹", "notebook", "colab", "kaggle"]),
     ("cloud", ["服务器", "主机", "云服务", "vps", "免费服务器", "云主机", "instance"]),
     ("hosting", ["部署", "托管", "网站", "博客", "前端", "静态"]),

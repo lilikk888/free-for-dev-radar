@@ -110,3 +110,22 @@ def test_curated_results_carry_tags_for_ui():
     r = search.search("图床", foreign_rows=[], limit=10)
     for e in r["curated"]:
         assert isinstance(e.get("tags"), list) and e["tags"], "UI 依赖 tags 字段渲染标签"
+
+
+def test_chinese_query_without_spaces():
+    """回归测试：中文查询没有空格。
+
+    「学生免费」这种连写（用户不会打空格）曾经查出 0 条 ——
+    因为它既不在英文正文里，也不作为整串出现在标签中。
+    解法是给中文词建自同义词。
+    """
+    for q in ["学生免费", "学生", "羊毛", "白嫖", "教育优惠"]:
+        r = search.search(q, foreign_rows=[], limit=99)
+        assert r["counts"]["curated"] > 0, f"「{q}」应该能搜到东西"
+
+
+def test_student_category_is_guessed():
+    r = search.search("学生免费", foreign_rows=[], limit=99)
+    assert "student" in r["guessed_categories"]
+    names = [e["name"] for e in r["curated"]]
+    assert any("学生" in n for n in names), "学生专属福利应该在结果里"
