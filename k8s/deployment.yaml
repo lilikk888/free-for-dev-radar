@@ -24,12 +24,34 @@ spec:
       labels:
         app.kubernetes.io/name: radar
     spec:
+      # ⭐ 明确排除 1GB 的 Micro 节点。
+      #
+      # 为什么必须写死这一步（实测踩到的故障）：
+      # 副本从 1 改成 2 之后，第二个副本被调度器扔到了 `instance-20260902-1251`
+      # （1/8 OCPU + 1GB），那台机器光 DaemonSet（calico/promtail/node-exporter）
+      # 就占掉 92% 内存 → 应用 Pod 起来了但响应不了健康探针
+      # （`dial tcp ...: connect: connection refused` / `context deadline exceeded`）
+      # → 一直重启 → `kubectl rollout status` 永远等不到 2/2 → **CI 报超时失败
+      #   → GitHub 往邮箱发失败通知**。
+      #
+      # 结论：那台机器的定位是「只跑 DaemonSet」，业务 Pod 一律不上去。
+      # （用 affinity 而不是给节点打 taint：taint 会连带影响没有 toleration 的
+      #   DaemonSet，affinity 只约束这一个工作负载，影响面可控。）
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - instance-20260902-1251
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
       containers:
         - name: radar
-          image: ghcr.io/lilikk888/free-for-dev-radar:sha-a00ea56
+          image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
           imagePullPolicy: Always
           ports:
             - name: http
