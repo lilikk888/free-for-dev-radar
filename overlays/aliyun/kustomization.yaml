@@ -1,0 +1,23 @@
+---
+# 阿里云（1.6GB 小机器）专用 overlay。
+#
+# ⚠️ 目录位置的坑（实测踩到）：
+#   这个 overlay **不能放在 k8s/ 里面**。
+#   因为它要引用 base（k8s/），而 k8s/ 又包含它自己 → kustomize 直接报：
+#     cycle detected: candidate root '<...>/k8s'
+#                     contains visited root '<...>/k8s/overlays/aliyun'
+#   所以 overlay 放在仓库根目录下的 overlays/，与 base 平级。
+#
+# 存在的意义：**同一套清单 ≠ 同一套参数**。
+#   东京主控 12GB，阿里云这台 1.6GB —— 硬套同一份配置（2 副本 + HPA max 5）
+#   会触发「CPU 高 → 扩容 → 更耗资源 → CPU 更高」的正反馈，
+#   上次就是这么把那台机器打到 sshd 都起不来的。
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../k8s
+
+patches:
+  - path: deployment-replicas.yaml
+  - path: hpa-limits.yaml
