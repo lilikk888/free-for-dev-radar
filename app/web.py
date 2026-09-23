@@ -13,11 +13,15 @@ from . import data_curated
 from . import db
 from . import metrics as metrics_mod
 from . import search as search_mod
+from . import tracing
 from . import userdata
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-app = FastAPI(title="免费资源雷达", version="0.2.0")
+app = FastAPI(title="免费资源雷达", version="0.3.0")
+
+# 链路追踪（可选）：没配 OTEL_EXPORTER_OTLP_ENDPOINT 就什么都不做
+tracing.setup(app)
 
 # 已知路由的固定清单。指标标签必须是有界的，否则随便一个扫描器
 # 打一堆 /xxx 进来就能把 Prometheus 的标签基数打爆。

@@ -1,0 +1,43 @@
+---
+# Tempo：链路追踪数据的存储与查询后端。
+#
+# 为什么需要它：
+#   - Prometheus 回答「出了什么事」（指标异常）
+#   - Loki 回答「报了什么错」（日志内容）
+#   - **Tempo 回答「这一次请求慢在哪一环」**（调用链的各段耗时）
+#   三者互补，缺一个都会在排查时卡住。
+#
+# 与 Loki 的对比（用同一套思路）：
+#   | | Loki | Tempo |
+#   |---|---|---|
+#   | 索引 | 只索引标签，正文不索引 | 只索引 trace_id |
+#   | 存储 | 对象存储/本地 | 对象存储/本地 |
+#   | 写入方式 | Push（promtail）| Pull？不是 —— 应用/collector 推 OTLP |
+#
+# 取舍：
+# - **单副本 + local 存储**：个人项目，量极小。生产要高可用应上对象存储（S3 兼容）
+#   并把 distributor/ingester/querier 拆开部署。
+# - retention 72h：够排查最近三天的问题，磁盘占用可控。
+# - 内存给到 768Mi 上限：Tempo 在接收第一个 span 时会申请一定内存，
+#   给太小会出现 OOMKilled（比 Loki 吃内存）。
+tempo:
+  retention: 72h
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      memory: 768Mi
+
+# 单副本（个人项目的量完全够）
+replicas: 1
+
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClassName: local-path

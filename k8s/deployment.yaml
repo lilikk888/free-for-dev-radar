@@ -46,12 +46,27 @@ spec:
                     operator: NotIn
                     values:
                       - instance-20260902-1251
+      # ⭐ 尽量把两个副本打散到不同节点。
+      #
+      # 之前两个副本都被塞在同一台（ARM 主控）上 —— 那不是高可用，
+      # 那台机器一挂服务就全没了。
+      #
+      # 用 ScheduleAnyway（软约束）而不是 DoNotSchedule：
+      # 硬约束在只有两台可用节点时会变成"必须分开"，节点一少就会卡住调度；
+      # 软约束在节点够的时候自动打散，不够的时候至少还能跑起来。
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: radar
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
       containers:
         - name: radar
-          image: ghcr.io/lilikk888/free-for-dev-radar:sha-f0beabb
+          image: ghcr.io/lilikk888/free-for-dev-radar:sha-e8b1e61
           imagePullPolicy: Always
           ports:
             - name: http
@@ -60,6 +75,17 @@ spec:
             # 只在没配 RADAR_DB_URL 时才起作用（回退到本地 SQLite）
             - name: RADAR_DB_PATH
               value: /data/radar.db
+            # ── 链路追踪 ──
+            # 应用会把 span 通过 OTLP/HTTP 推给 Tempo。
+            # Tempo 没起来也不会影响应用：导出失败只打日志（BatchSpanProcessor
+            # 本身就会丢弃并在后台重试），不会阻塞请求路径。
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://tempo.monitoring.svc.cluster.local:4318
+            - name: OTEL_SERVICE_NAME
+              value: radar
+            # 打了版本号才能在 Grafana 里按版本筛 trace
+            - name: RADAR_VERSION
+              value: sha-e8b1e61
           # 配了 RADAR_DB_URL 就用 PostgreSQL（多副本的前提）。
           # optional: true —— 没建这个 Secret 时不会卡住启动，自动回退 SQLite。
           envFrom:

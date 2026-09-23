@@ -5,3 +5,9 @@ prometheus-client>=0.21
 # PostgreSQL 驱动。只在配了 RADAR_DB_URL 时才真正用到；
 # 装 binary 版是为了省掉编译依赖（集群里构建镜像要快）
 psycopg[binary]>=3.2
+
+# 链路追踪（可选能力）：只在配了 OTEL_EXPORTER_OTLP_ENDPOINT 时才真正加载。
+# 装 distro 是为了拿到版本兼容的一组包，避免手工对齐版本。
+opentelemetry-sdk>=1.30
+opentelemetry-exporter-otlp-proto-http>=1.30
+opentelemetry-instrumentation-fastapi>=0.51b0

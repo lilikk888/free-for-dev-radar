@@ -1,0 +1,144 @@
+---
+# 成本仪表盘：把「用了多少资源」折算成「如果按量付费要花多少钱」。
+#
+# 为什么一个学生项目要做成本面板：
+#   1. 云上真正贵的是「资源」不是「代码」，有成本意识是工程能力的一部分；
+#   2. 面试里「你这个项目一个月多少钱」是很常见的追问，
+#      能立刻答出「实际 0 元，按量折算约 ¥XXX/月，因为它全跑在免费额度上」，
+#      比含糊其辞强得多；
+#   3. 折算公式会逼你搞清楚「CPU、内存、磁盘、出网流量」各自的计价方式。
+#
+# ⚠️ 单价是**可调假设**，不是某家厂商的报价（我没法保证任何厂商的实时价格）。
+#    面板描述里写清了假设值，改 PromQL 里的常量即可换成真实单价。
+#
+# 假定单价（每月）：CPU ¥30/核 · 内存 ¥10/GB · 磁盘 ¥0.5/GB
+# 本集群规格：6 核 · 14.6 GB 内存 · 130 GB 磁盘（三台免费机器）
+#   → 180 + 146 + 65 = 约 ¥391/月，实际支付 ¥0
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-cost
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  cost-overview.json: |-
+    {
+      "title": "成本与资源（免费额度利用情况）",
+      "uid": "cost-overview",
+      "tags": ["radar", "cost"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "refresh": "1m",
+      "time": {"from": "now-6h", "to": "now"},
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "实际支付（本月）",
+          "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+          "targets": [
+            {"refId": "A", "expr": "0", "instant": true, "legendFormat": "¥"}
+          ],
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "reduceOptions": {"calcs": ["lastNotNull"]}
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "currencyCNY",
+              "decimals": 2,
+              "color": {"mode": "fixed", "fixedColor": "green"}
+            },
+            "overrides": []
+          },
+          "description": "三台机器全部跑在免费额度上：Oracle Always Free + 阿里云免费试用。"
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "按量折算（每月）",
+          "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+          "targets": [
+            {"refId": "A", "expr": "sum(kube_node_status_capacity{resource=\"cpu\"}) * 30 + sum(kube_node_status_capacity{resource=\"memory\"}) / 1024 / 1024 / 1024 * 10 + sum(kubelet_volume_stats_capacity_bytes) / 1024 / 1024 / 1024 * 0.5", "instant": true}
+          ],
+          "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {
+            "defaults": {"unit": "currencyCNY", "decimals": 0, "color": {"mode": "fixed", "fixedColor": "orange"}},
+            "overrides": []
+          },
+          "description": "假设单价：CPU ¥30/核/月、内存 ¥10/GB/月、磁盘 ¥0.5/GB/月。改公式里的常量即可换成真实报价。"
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "免费额度省下的钱（每月）",
+          "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
+          "targets": [
+            {"refId": "A", "expr": "sum(kube_node_status_capacity{resource=\"cpu\"}) * 30 + sum(kube_node_status_capacity{resource=\"memory\"}) / 1024 / 1024 / 1024 * 10 + sum(kubelet_volume_stats_capacity_bytes) / 1024 / 1024 / 1024 * 0.5", "instant": true}
+          ],
+          "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {
+            "defaults": {"unit": "currencyCNY", "decimals": 0, "color": {"mode": "fixed", "fixedColor": "green"}},
+            "overrides": []
+          },
+          "description": "等于「按量折算」全额 —— 因为实际支付是 0。这一栏就是这套免费额度方案的价值。"
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "集群规模",
+          "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
+          "targets": [
+            {"refId": "A", "expr": "count(kube_node_info)", "instant": true, "legendFormat": "节点"},
+            {"refId": "B", "expr": "sum(kube_node_status_capacity{resource=\"cpu\"})", "instant": true, "legendFormat": "核"},
+            {"refId": "C", "expr": "count(count by (namespace) (kube_pod_info))", "instant": true, "legendFormat": "命名空间"}
+          ],
+          "options": {"colorMode": "none", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "color": {"mode": "fixed", "fixedColor": "blue"}}, "overrides": []},
+          "description": "当前集群的节点数、CPU 核数、命名空间数。"
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "资源利用率（越高越「物尽其用」）",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5},
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "100 * (1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])))",
+              "legendFormat": "CPU 使用率"
+            },
+            {
+              "refId": "B",
+              "expr": "100 * (1 - sum(node_memory_MemAvailable_bytes) / sum(node_memory_MemTotal_bytes))",
+              "legendFormat": "内存使用率"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {"unit": "percent", "min": 0, "max": 100, "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 8}},
+            "overrides": []
+          },
+          "description": "免费额度也有「闲置回收」风险（Oracle 对长期低负载实例会回收），所以利用率不能太低。"
+        },
+        {
+          "id": 6,
+          "type": "table",
+          "title": "各节点资源明细",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5},
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "kube_node_status_capacity{resource=\"cpu\"}",
+              "format": "table",
+              "instant": true
+            }
+          ],
+          "transformations": [
+            {"id": "organize", "options": {"excludeByName": {"Time": true, "__name__": true, "resource": true, "unit": true, "instance": true, "job": true, "namespace": true, "service": true, "container": true, "endpoint": true, "pod": true}, "renameByName": {"node": "节点", "Value": "CPU 核数"}}}
+          ],
+          "description": "三台机器的 CPU 核数（内存/磁盘同理，用 kube_node_status_capacity 换 resource 参数）。"
+        }
+      ]
+    }

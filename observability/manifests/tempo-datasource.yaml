@@ -1,0 +1,42 @@
+---
+# Grafana 数据源：Tempo（链路追踪）。
+#
+# 和 Loki 数据源同样的套路：ConfigMap + `grafana_datasource: "1"` 标签，
+# sidecar 自动注册，不用手点 UI，重装 Grafana 也能自动回来。
+#
+# 为什么要有它：
+#   Prometheus 看「哪条曲线不对」→ Loki 看「日志报了啥」→ **Tempo 看「这一次请求慢在哪一环」**。
+#   三者串起来才是完整的排查闭环。
+#
+# ⚠️ 这里没配 tracesToLogs（从 trace 一键跳到对应日志），
+#    因为那需要 Loki 数据源有一个**固定 uid**，而现有 Loki 数据源没设 uid
+#    （Grafana 会自己生成一个）。改动老数据源的 uid 会连带影响已有仪表盘的引用，
+#    风险大于收益，所以留作后续优化项。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasource-tempo
+  namespace: monitoring
+  labels:
+    grafana_datasource: "1"
+data:
+  tempo-datasource.yaml: |-
+    apiVersion: 1
+    datasources:
+      - name: Tempo
+        type: tempo
+        access: proxy
+        # Tempo 的 HTTP 端口是 3200（OTLP 接收在 4318，查询走 3200）
+        url: http://tempo.monitoring.svc.cluster.local:3200
+        isDefault: false
+        editable: false
+        jsonData:
+          # 服务拓扑图：根据 span 之间的调用关系自动画出服务依赖
+          nodeGraph:
+            enabled: true
+          # 搜索时按 service / span 名过滤（Tempo 默认只按 trace_id 查）
+          search:
+            hide: false
+          # 保留时间范围跟随图表（方便看某次请求前后的 span）
+          lokiSearch:
+            datasourceUid: ""
