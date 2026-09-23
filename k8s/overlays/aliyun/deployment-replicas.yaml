@@ -1,0 +1,12 @@
+---
+# 小机器上只跑 1 个副本。
+#
+# 这个应用是个人工具，本来也不需要多副本扛流量；
+# 在 1.6GB 的机器上跑 2 个副本只是白白多占一份内存。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: radar
+  namespace: radar
+spec:
+  replicas: 1

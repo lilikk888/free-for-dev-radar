@@ -1,0 +1,17 @@
+---
+# ⭐ 关键修复：把 HPA 上限压到 2。
+#
+# 基础清单是 min 2 / max 5。在那台 1.6GB 的机器上，
+# CPU 一旦升高就会触发「扩容 → 更耗资源 → CPU 更高」的正反馈 ——
+# 上次 HPA 一路扩到 5 个副本，是那台机器被打满的直接放大器。
+#
+# 所以这里：min 1 / max 2 —— 即使负载升高也最多多开一个副本，
+# 不会形成失控的放大回路。
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: radar
+  namespace: radar
+spec:
+  minReplicas: 1
+  maxReplicas: 2
