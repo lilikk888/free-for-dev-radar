@@ -150,15 +150,24 @@ alertmanager:
       group_by: ["alertname", "namespace"]
       group_wait: 30s          # 攒 30 秒再发，让同一批告警合并成一条
       group_interval: 5m       # 同一组的后续变化最多 5 分钟一次
-      repeat_interval: 4h      # 没解决的告警最多 4 小时提醒一次
+      repeat_interval: 12h     # 没解决的告警最多 12 小时提醒一次
 
       routes:
-        # critical：立刻通知（group_wait 缩短，2 小时提醒一次）
+        # ⚠️ 2026-09-23：告警邮件**已停用**（receiver 改回 null）。
+        # 起因：critical 告警每 2 小时重复一封，把用户的 163 邮箱刷了屏 ——
+        # 用户明确表示不要再往邮箱发东西。
+        #
+        # 告警本身仍然在算（Prometheus 规则没动），只是不再发信：
+        #   - 想看告警：Grafana → Alertmanager 面板，或 kubectl port-forward 后看 UI
+        #   - 想恢复发信：把下面的 receiver 改回 "email-critical" 再 helm upgrade
+        #
+        # 另外教训：恢复发信时 repeat_interval 也要保持 24h ——
+        # 之前 critical 是 2h 重复一次，一个持续存在的告警一天能发 12 封。
         - matchers:
             - severity = "critical"
-          receiver: "email-critical"
+          receiver: "null"
           group_wait: 10s
-          repeat_interval: 2h
+          repeat_interval: 24h
 
         # warning：只记录不打扰
         - matchers:
