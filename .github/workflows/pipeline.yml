@@ -156,42 +156,47 @@ jobs:
       - name: 回写镜像 tag 到仓库
         run: |
           TAG="sha-$(echo "$GITHUB_SHA" | cut -c1-7)"
-          echo "新镜像 tag：$TAG"
-
-          if grep -q "newTag: $TAG" k8s/kustomization.yaml; then
-            echo "仓库里已经是 $TAG，无需提交"
-            exit 0
-          fi
-
-          # kustomization 是权威来源；deployment/cronjob 里的字面量也一起改，
-          # 这样即使有人直接 kubectl apply 单个文件也不会拿到旧镜像
-          sed -i "s|newTag:.*|newTag: $TAG|" k8s/kustomization.yaml
-          sed -i "s|\(ghcr.io/lilikk888/free-for-dev-radar:\)[^[:space:]]*|\1$TAG|g" \
-            k8s/deployment.yaml k8s/cronjob.yaml
+          echo "新镜像 tag：${TAG}"
 
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add k8s/
-          # ⚠️ [skip ci] 必须有：否则这次回写提交会再触发一轮流水线，形成无限循环
-          git commit -m "chore(deploy): bump image to $TAG [skip ci]"
-          # 推送重试：远端可能被别的东西推过（并发 run、人工提交）。
-          # 先 fetch + rebase 再推，最多试 5 次 —— 回写 tag 这种事失败一次
-          # 就意味着集群镜像不更新，不能只推一次听天由命。
+
+          # ⚠️ 关键：**先把本地重置到最新远端，再改，再推**。
+          #
+          # 之前是「先改 → 提交 → git rebase origin/main」——那个思路本身就是错的：
+          # 远端一旦也动过 k8s/ 里同样的行（比如另一次回写、或人工提交），
+          # rebase 必然冲突，而冲突是**解不掉**的（脚本没法判断该保留哪边），
+          # 于是重试 5 次全失败 → 流水线红。（真实发生过）
+          #
+          # 现在的顺序天然不会冲突：每次重试都从最新远端重新开始，
+          # 用 sed 在**最新的内容**上改一遍。重复执行也安全（幂等）。
           for i in 1 2 3 4 5; do
-            git fetch origin main
-            if ! git rebase origin/main; then
-              git rebase --abort
-              echo "rebase 冲突，跳过这次重试"
-              sleep 5
-              continue
-            fi
-            if git push; then
-              echo "tag 已推送（第 $i 次尝试）"
+            git fetch -q origin main
+            git checkout -q -B bump-tag origin/main
+
+            if grep -q "newTag: ${TAG}" k8s/kustomization.yaml; then
+              echo "仓库里已经是 ${TAG}，无需提交"
               exit 0
             fi
+
+            # kustomization 是权威来源；deployment / cronjob 里的字面量也一起改，
+            # 这样即使有人直接 kubectl apply 单个文件也不会拿到旧镜像
+            sed -i "s|newTag:.*|newTag: ${TAG}|" k8s/kustomization.yaml
+            sed -i "s|\(ghcr.io/lilikk888/free-for-dev-radar:\)[^[:space:]]*|\1${TAG}|g" \
+              k8s/deployment.yaml k8s/cronjob.yaml
+
+            git add k8s/
+            # ⚠️ [skip ci] 必须有：否则回写提交会再触发一轮流水线，形成无限循环
+            git commit -q -m "chore(deploy): bump image to ${TAG} [skip ci]"
+
+            if git push -q origin HEAD:main; then
+              echo "tag 已推送（第 ${i} 次尝试）"
+              exit 0
+            fi
+            echo "第 ${i} 次推送失败（远端又被推过），重新同步后再试"
             sleep 5
           done
-          echo "::error::回写 tag 连续 5 次失败，请检查仓库权限或并发冲突"
+          echo "::error::回写 tag 连续 5 次失败：请检查仓库写权限，或是否有其他流程在频繁推 main"
           exit 1
 
       - name: 等待 Argo CD 同步并滚动更新完成
