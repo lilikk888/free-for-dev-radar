@@ -72,6 +72,9 @@
   .tag.warn{background:var(--warn-soft);color:var(--warn)}
   .tag.bad{background:var(--danger-soft);color:var(--danger)}
   .tips{font-size:13.5px;color:var(--warn);background:var(--warn-soft);border-radius:8px;padding:8px 12px;margin-top:8px}
+  /* 数据新鲜度：精选条目是人工核对的，把「什么时候核对的」标出来 */
+  .reviewed{font-size:12.5px;color:#8a9099;margin-top:6px}
+  .reviewed.stale{color:var(--warn);font-weight:500}
   .go{display:inline-block;margin-top:10px;font-size:13.5px;font-weight:500}
   details{margin-top:8px}
   summary{cursor:pointer;font-size:13.5px;color:var(--muted)}
@@ -198,6 +201,9 @@ function cardHTML(e){
     <div class="sum">${esc(e.summary)}</div>
     ${e.quota ? `<div class="kv"><b>免费额度：</b>${esc(e.quota)}</div>` : ""}
     ${e.link_ok === false ? `<div class="tips">⚠️ 官网链接最近一次巡检打不开（${esc(e.link_error || "无法访问")}）—— 可能已经停服，注册前先自己确认一下。</div>` : ""}
+    ${e.needs_review && e.reviewed
+        ? `<div class="reviewed stale">⚠️ 这条的政策核对于 ${esc(e.reviewed)}（${e.review_age_months} 个月前），额度可能已变，请以官网为准。</div>`
+        : (e.reviewed ? `<div class="reviewed">政策核对于 ${esc(e.reviewed)}</div>` : "")}
     <div class="tags">${tagHTML}</div>
     ${e.tips ? `<div class="tips">注意：${esc(e.tips)}</div>` : ""}
     ${e.url ? `<a class="go" href="${esc(e.url)}" target="_blank" rel="noopener">打开官网 →</a>` : ""}

@@ -1,0 +1,121 @@
+---
+# PostgreSQL 备份。
+#
+# ⚠️ 为什么需要它：项目里原本**只有 etcd 备份** —— 但 etcd 存的是集群状态，
+# 真正的业务数据（1348 条资源、变更历史、领用记录）全在 PG 的 PVC 里。
+# 那个 PVC 出问题 = 数据全丢，而且**没有任何东西能救回来**。
+#
+# 设计取舍：
+# - 用 `pg_dump -Fc`（自定义格式）而不是直接拷数据文件：
+#   压缩过、体积小，而且能**只恢复某张表**（比如只救回被误删的 mine 表）
+# - **备份后必须校验**（`pg_restore --list`）：能列出来才算有效备份。
+#   不校验的话，"备份成功"这四个字毫无意义 —— 恢复时才发现文件是坏的
+# - 只保留最近 7 份：防止备份把磁盘写满，反而把服务搞挂
+# - ⚠️ **局限（要说清楚）**：备份存在同一个集群的 PVC 上，
+#   能应对「误删数据 / 改错数据」，但**应对不了整个集群故障或 PVC 损坏**。
+#   要真容灾得把备份传到集群外（对象存储 / 另一台机器）——
+#   留作后续，先把"有备份"这一步做了
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: radar-backup
+  namespace: radar
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      # 每个 dump 大约几百 KB（数据量本来就小），2Gi 留足余量
+      storage: 2Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: radar-pg-backup-script
+  namespace: radar
+data:
+  backup.sh: |
+    #!/bin/sh
+    set -eu
+
+    TS=$(date +%Y%m%d-%H%M)
+    FILE="/backups/radar-${TS}.dump"
+
+    echo "[$(date -Iseconds)] 开始备份 -> ${FILE}"
+    pg_dump --format=custom --file="${FILE}" "${RADAR_DB_URL}"
+
+    # ⭐ 校验：能列出内容才说明这个 dump 是可用的
+    # （不做这步的话，"备份成功"可能只是一句空话，恢复时才发现文件坏了）
+    pg_restore --list "${FILE}" > /dev/null
+    SIZE=$(du -h "${FILE}" | cut -f1)
+    echo "[$(date -Iseconds)] 校验通过：${SIZE}"
+
+    # 只保留最近 7 份（防止备份把磁盘写满，反而把服务搞挂）
+    KEEP=7
+    COUNT=$(ls -1 /backups/radar-*.dump 2>/dev/null | wc -l)
+    if [ "${COUNT}" -gt "${KEEP}" ]; then
+      ls -1t /backups/radar-*.dump | tail -n +$((KEEP + 1)) | while read -r old; do
+        rm -f "${old}"
+        echo "[$(date -Iseconds)] 清理旧备份：${old}"
+      done
+    fi
+
+    echo "[$(date -Iseconds)] 完成，当前保留 $(ls -1 /backups/radar-*.dump | wc -l) 份"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: radar-pg-backup
+  namespace: radar
+spec:
+  # 每天 03:10 —— 排在 etcd 备份（03:32）之前，避免两个任务抢 IO
+  schedule: "10 3 * * *"
+  timeZone: Asia/Shanghai
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      # 备份卡住不要一直挂着
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: radar-pg-backup
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            # postgres 官方镜像里 postgres 用户的 uid
+            runAsUser: 999
+            fsGroup: 999
+          containers:
+            - name: backup
+              image: docker.io/library/postgres:17-alpine
+              command: ["/bin/sh", "/scripts/backup.sh"]
+              envFrom:
+                # RADAR_DB_URL 在里面（pg_dump 直接吃连接串，不用单独传密码）
+                - secretRef:
+                    name: radar-pg
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+                - name: script
+                  mountPath: /scripts
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
+                limits:
+                  cpu: 300m
+                  memory: 192Mi
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: radar-backup
+            - name: script
+              configMap:
+                name: radar-pg-backup-script
+                defaultMode: 0555

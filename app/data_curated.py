@@ -13,6 +13,9 @@
 
 from __future__ import annotations
 
+from datetime import date
+from typing import Any
+
 # ── 分类（中文名 + 排序权重，权重小的排前面）────────────────────────────
 CATEGORIES: list[tuple[str, str]] = [
     ("student", "学生专属福利"),
@@ -1313,6 +1316,60 @@ ENTRIES = ENTRIES + _EXTRA_ENTRIES
 def as_list() -> list[dict]:
     """返回全部精选条目（浅拷贝，避免调用方误改模块常量）。"""
     return [dict(e) for e in ENTRIES]
+
+
+# 多久没核对就算「该复核了」。
+# 定 3 个月是因为国内平台的免费政策变动频率大概就是这个量级
+# （额度缩水、活动结束、加实名要求），而人工核对一次的成本不低。
+REVIEW_INTERVAL_MONTHS = 3
+
+
+def review_status(reviewed: str | None, today: date | None = None) -> dict[str, Any]:
+    """算一条精选数据「距上次人工核对多久了」。
+
+    为什么需要这个：**精选这层数据是人工维护的，没人维护就会慢慢腐烂**。
+    （自动抓的那层有采集任务盯着，链接挂了有巡检盯着，唯独「额度从 2000 万
+    缩成 1000 万」这种变化没有任何机制能发现 —— 只能靠定期人工复核。）
+
+    所以这里不假装能自动检测政策变化，而是**老实标注新鲜度**，
+    把「该复核了」这这件事变得可见。
+
+    reviewed 形如 "2026-09"：只到月，因为人工核对到月就够了，精确到日反而难维护。
+    """
+    today = today or date.today()
+    if not reviewed:
+        return {"reviewed": None, "review_age_months": None, "needs_review": True}
+    try:
+        year, month = (int(x) for x in str(reviewed).split("-")[:2])
+    except (ValueError, TypeError):
+        return {"reviewed": reviewed, "review_age_months": None, "needs_review": True}
+
+    age = (today.year - year) * 12 + (today.month - month)
+    return {
+        "reviewed": reviewed,
+        "review_age_months": age,
+        "needs_review": age >= REVIEW_INTERVAL_MONTHS,
+    }
+
+
+def review_summary(items: list[dict] | None = None, today: date | None = None) -> dict[str, Any]:
+    """整份精选数据的新鲜度汇总（页面顶部提示用）。"""
+    items = ENTRIES if items is None else items
+    today = today or date.today()
+    ages = []
+    stale = 0
+    for e in items:
+        st = review_status(e.get("reviewed"), today)
+        if st["review_age_months"] is not None:
+            ages.append(st["review_age_months"])
+        if st["needs_review"]:
+            stale += 1
+    return {
+        "total": len(items),
+        "needs_review": stale,
+        "oldest_months": max(ages) if ages else None,
+        "reviewed_month": (min(e.get("reviewed") or "" for e in items) or None),
+    }
 
 
 def category_name(key: str) -> str:

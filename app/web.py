@@ -112,6 +112,8 @@ def api_search(
             item["link_error"] = (v or {}).get("error")
     except Exception:  # pragma: no cover - 巡检还没跑过时不影响搜索
         pass
+    # 精选数据是人工维护的，补上「距上次核对多久」让新鲜度可见
+    _attach_review_status(result.get("curated", []))
     return result
 
 
@@ -183,11 +185,30 @@ def api_links(only_dead: bool = Query(False, description="只看不可达的")) 
     return {"stats": linkcheck.stats(), "items": items}
 
 
+def _attach_review_status(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """给精选条目补上「距上次人工核对多久」。
+
+    为什么要有这个字段：**人工维护的数据是会腐烂的** ——
+    自动抓的那层有采集任务盯着、链接挂了有巡检盯着，
+    唯独「免费额度从 2000 万缩成 1000 万」这类变化没有任何机制能自动发现。
+    所以不假装能检测，而是把新鲜度**标出来**，让用户和作者都知道哪条该复核了。
+    """
+    for item in items:
+        item.update(data_curated.review_status(item.get("reviewed")))
+    return items
+
+
 @app.get("/api/curated")
 def api_curated(cat: str | None = None) -> dict[str, Any]:
     """全部人工精选条目（供页面做客户端筛选/收藏）。"""
     items = [e for e in data_curated.as_list() if not cat or e["category"] == cat]
-    return {"count": len(items), "items": items}
+    _attach_review_status(items)
+    return {
+        "count": len(items),
+        "items": items,
+        # 整份数据的新鲜度汇总，页面顶部可以提示「有 N 条待复核」
+        "freshness": data_curated.review_summary(),
+    }
 
 
 @app.get("/api/tags")
