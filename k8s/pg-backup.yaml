@@ -40,15 +40,26 @@ data:
 
     TS=$(date +%Y%m%d-%H%M)
     FILE="/backups/radar-${TS}.dump"
+    # ⭐ 先写到 .partial，校验通过后才改名成正式名字。
+    #
+    # 为什么必须这样（实测踩到的）：pg_dump 中途被打断（pod 被杀、节点故障）
+    # 会留下一个**残缺文件**，而恢复时按 `ls -1t | head -1` 取最新的，
+    # 很可能就选中那个坏文件 —— 等到要救数据时才发现备份是空的。
+    # 原子改名保证目录里出现的一定是完整备份。
+    TMP="${FILE}.partial"
 
     echo "[$(date -Iseconds)] 开始备份 -> ${FILE}"
-    pg_dump --format=custom --file="${FILE}" "${RADAR_DB_URL}"
+    pg_dump --format=custom --file="${TMP}" "${RADAR_DB_URL}"
 
-    # ⭐ 校验：能列出内容才说明这个 dump 是可用的
+    # 校验：能列出内容才说明这个 dump 是可用的
     # （不做这步的话，"备份成功"可能只是一句空话，恢复时才发现文件坏了）
-    pg_restore --list "${FILE}" > /dev/null
+    pg_restore --list "${TMP}" > /dev/null
+    mv "${TMP}" "${FILE}"
     SIZE=$(du -h "${FILE}" | cut -f1)
-    echo "[$(date -Iseconds)] 校验通过：${SIZE}"
+    echo "[$(date -Iseconds)] 校验通过并改名完成：${SIZE}"
+
+    # 清理可能残留的残缺文件（上次被强杀留下的）
+    find /backups -name 'radar-*.dump.partial' -mmin +60 -delete 2>/dev/null || true
 
     # 只保留最近 7 份（防止备份把磁盘写满，反而把服务搞挂）
     KEEP=7
