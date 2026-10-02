@@ -5,13 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from . import data_curated
 from . import db
 from . import metrics as metrics_mod
+from . import review
 from . import search as search_mod
 from . import tracing
 from . import userdata
@@ -28,6 +29,7 @@ tracing.setup(app)
 _KNOWN_PATHS = (
     "/", "/healthz", "/metrics", "/api/changes", "/api/snapshots", "/api/stats",
     "/api/search", "/api/categories", "/api/curated", "/api/tags",
+    "/api/review", "/review",
 )
 
 
@@ -186,15 +188,23 @@ def api_links(only_dead: bool = Query(False, description="只看不可达的")) 
 
 
 def _attach_review_status(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """给精选条目补上「距上次人工核对多久」。
+    """给精选条目补上新鲜度（合并代码里的 `reviewed` 与数据库里的确认记录）。
 
     为什么要有这个字段：**人工维护的数据是会腐烂的** ——
     自动抓的那层有采集任务盯着、链接挂了有巡检盯着，
     唯独「免费额度从 2000 万缩成 1000 万」这类变化没有任何机制能自动发现。
-    所以不假装能检测，而是把新鲜度**标出来**，让用户和作者都知道哪条该复核了。
+    所以不假装能检测，而是把新鲜度**标出来**，让"该复核了"变得可见。
     """
+    try:
+        st_all = review.statuses()
+    except Exception:  # pragma: no cover - 数据库不可用时不该让搜索挂掉
+        st_all = {}
     for item in items:
-        item.update(data_curated.review_status(item.get("reviewed")))
+        st = st_all.get(item.get("id"))
+        if st:
+            item.update({k: v for k, v in st.items() if k != "note"})
+        else:
+            item.update(data_curated.review_status(item.get("reviewed")))
     return items
 
 
@@ -209,6 +219,39 @@ def api_curated(cat: str | None = None) -> dict[str, Any]:
         # 整份数据的新鲜度汇总，页面顶部可以提示「有 N 条待复核」
         "freshness": data_curated.review_summary(),
     }
+
+
+# ── 复核流程 ────────────────────────────────────────────────────────────────
+# 精选数据是人工维护的，「定期复核」不落到具体清单上就只是句空话 ——
+# 打开 88 条数据不知道从哪下手，最后就是不复核。
+
+@app.get("/api/review")
+def api_review() -> dict[str, Any]:
+    """待复核清单：最久没核对的排前面，每条附「要核对什么」+ 官网链接。"""
+    return review.checklist()
+
+
+@app.post("/api/review/{entry_id}")
+def api_review_confirm(entry_id: str, note: str | None = Query(None)) -> dict[str, Any]:
+    """标记「这条我核对过了，当前还准」。
+
+    只记录到数据库，**不改代码** —— 数据内容没变时不该要求改代码 + 走一次部署。
+    """
+    try:
+        return {"ok": True, **review.confirm(entry_id, note)}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/api/review/{entry_id}")
+def api_review_forget(entry_id: str) -> dict[str, Any]:
+    """撤销一次确认（点错了用）。"""
+    return {"ok": review.forget(entry_id)}
+
+
+@app.get("/review")
+def review_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "review.html")
 
 
 @app.get("/api/tags")

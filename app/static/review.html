@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>精选数据复核 · 免费资源雷达</title>
+<style>
+  :root{--brand:#185FA5;--brand-soft:#e8f1fa;--warn:#8a5a00;--warn-soft:#fff6e5;
+        --ok:#0f7b3f;--ok-soft:#e9f7ef;--line:#e6e8eb;--muted:#8a9099}
+  *{box-sizing:border-box}
+  body{margin:0;background:#f7f8fa;color:#1f2329;
+       font:15px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:860px;margin:0 auto;padding:28px 20px 60px}
+  a{color:var(--brand)}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:13.5px;margin-bottom:18px}
+  .bar{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 18px;
+       display:flex;gap:24px;flex-wrap:wrap;align-items:baseline;margin-bottom:20px}
+  .bar b{font-size:20px;margin-right:4px}
+  .pending b{color:var(--warn)}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:12px}
+  .card h3{margin:0 0 4px;font-size:16px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+  .cat{font-size:12px;font-weight:500;color:var(--brand);background:var(--brand-soft);
+       padding:2px 8px;border-radius:6px}
+  .age{font-size:12.5px;color:var(--warn);background:var(--warn-soft);
+       padding:2px 8px;border-radius:6px}
+  .quota{font-size:13.5px;color:#4a5058;margin:6px 0 10px}
+  .checks{background:#fbfcfd;border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin:10px 0}
+  .checks .t{font-size:12.5px;color:var(--muted);margin-bottom:4px}
+  .checks ul{margin:0;padding-left:18px}
+  .checks li{font-size:13.5px;margin:2px 0}
+  .acts{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}
+  .go,.done{font-size:13.5px;padding:7px 14px;border-radius:8px;border:1px solid var(--line);
+            background:#fff;cursor:pointer;text-decoration:none;color:#1f2329}
+  .done{background:var(--ok-soft);border-color:#bfe3cd;color:var(--ok);font-weight:500}
+  .done:hover{background:#d9f0e3}
+  .done[disabled]{opacity:.55;cursor:default}
+  .done2{font-size:26px;color:var(--ok);text-align:center;padding:40px 0}
+  .back{display:inline-block;margin-bottom:16px;font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/">← 回到搜索</a>
+  <h1>精选数据复核</h1>
+  <div class="sub">
+    自动抓取那层有采集任务盯着、链接挂了有巡检盯着；
+    但「免费额度从 2000 万缩成 1000 万」这类变化<b>没有任何机制能自动发现</b>——
+    只能靠人偶尔看一眼。这个页面就是把这件事变成一张能照着做的清单。
+  </div>
+
+  <div class="bar" id="bar"><span>加载中…</span></div>
+  <div id="list"></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => (s==null?"":String(s)).replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+async function load(){
+  const d = await (await fetch("/api/review")).json();
+  const overdue = d.items.filter(i => i.age_months !== null);
+  const never = d.items.filter(i => i.age_months === null);
+
+  $("#bar").innerHTML = `
+    <span>共 <b>${d.total}</b> 条精选</span>
+    <span class="pending">待复核 <b>${d.pending}</b> 条</span>
+    <span>复核间隔 <b>${d.interval_months}</b> 个月</span>`;
+
+  if(!d.items.length){
+    $("#list").innerHTML = `<div class="card done2">
+      ✓ 全部 ${d.total} 条都在有效期内，暂时不需要复核</div>`;
+    return;
+  }
+
+  const order = [...never, ...overdue];   // 从没核对过的排最前
+  $("#list").innerHTML = order.map(it => `
+    <div class="card" id="c-${esc(it.id)}">
+      <h3>${esc(it.name)} <span class="cat">${esc(it.category_cn||"")}</span>
+        <span class="age">${it.age_months === null
+            ? "从未核对"
+            : it.age_months + " 个月没核对"}</span>
+      </h3>
+      ${it.quota ? `<div class="quota">当前记录的额度：${esc(it.quota)}</div>` : ""}
+      <div class="checks">
+        <div class="t">打开官网后，核对这几项：</div>
+        <ul>${(it.checkpoints||[]).map(c => `<li>${esc(c)}</li>`).join("")}</ul>
+      </div>
+      <div class="acts">
+        ${it.url ? `<a class="go" href="${esc(it.url)}" target="_blank" rel="noopener">打开官网核对 ↗</a>` : ""}
+        <button class="done" data-id="${esc(it.id)}">✓ 核对过了，还准</button>
+      </div>
+    </div>`).join("");
+
+  $("#list").querySelectorAll(".done").forEach(b => {
+    b.onclick = async () => {
+      b.disabled = true; b.textContent = "记录中…";
+      try{
+        const r = await fetch("/api/review/" + encodeURIComponent(b.dataset.id),
+                             {method:"POST"});
+        if(!r.ok) throw new Error(r.status);
+        const el = document.getElementById("c-" + b.dataset.id);
+        el.style.transition = "opacity .3s"; el.style.opacity = "0";
+        setTimeout(() => { el.remove(); if(!document.querySelectorAll(".card").length) load(); }, 300);
+      }catch(e){
+        b.disabled = false; b.textContent = "失败，重试";
+      }
+    };
+  });
+}
+load();
+</script>
+</body>
+</html>

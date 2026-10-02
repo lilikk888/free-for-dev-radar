@@ -94,6 +94,21 @@ CREATE TABLE IF NOT EXISTS seen_entries (
     first_seen TEXT NOT NULL,
     last_seen  TEXT NOT NULL
 );
+
+-- 复核记录。
+--
+-- ⚠️ 为什么这个表必须存在（而不是只靠 data_curated.py 里的 reviewed 字段）：
+-- 这里是**两个不同性质的真相来源**：
+--   - `data_curated.reviewed`（代码里）：跟着**数据内容**一起版本化。
+--     改动了一条资源的描述/额度，就该更新它 —— 它是"这版数据是什么时候写的"
+--   - `review_log.confirmed_at`（数据库里）：**用户运行时**点了"我核对过，还准"。
+--     数据没变但用户确认了一遍，新鲜度也该刷新 —— 这不该要求改代码
+-- 算"该不该复核"时取两者中较新的那个。
+CREATE TABLE IF NOT EXISTS review_log (
+    entry_id     TEXT PRIMARY KEY,
+    confirmed_at TEXT NOT NULL,
+    note         TEXT
+);
 """
 
 SQLITE_PK = "INTEGER PRIMARY KEY AUTOINCREMENT"

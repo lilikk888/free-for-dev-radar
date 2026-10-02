@@ -1324,42 +1324,83 @@ def as_list() -> list[dict]:
 REVIEW_INTERVAL_MONTHS = 3
 
 
-def review_status(reviewed: str | None, today: date | None = None) -> dict[str, Any]:
-    """算一条精选数据「距上次人工核对多久了」。
+def review_status(
+    reviewed: str | None,
+    confirmed_at: str | None = None,
+    today: date | None = None,
+) -> dict[str, Any]:
+    """算一条精选数据的新鲜度 —— 综合**两个来源**。
 
-    为什么需要这个：**精选这层数据是人工维护的，没人维护就会慢慢腐烂**。
-    （自动抓的那层有采集任务盯着，链接挂了有巡检盯着，唯独「额度从 2000 万
-    缩成 1000 万」这种变化没有任何机制能发现 —— 只能靠定期人工复核。）
+    为什么是两个来源（这俩管的是不同的事，不能混）：
+      - `reviewed`（"2026-09"）：跟着**数据内容**一起版本化，来自代码。
+        改了这条资源的描述/额度就该更新它 —— 它回答"这版数据什么时候写的"
+      - `confirmed_at`（"2026-10-02T..."）：**用户运行时**点了"我核对过，还准"。
+        数据一个字没改，但人确认过一遍，新鲜度也该刷新 —— 不该要求去改代码
 
-    所以这里不假装能自动检测政策变化，而是**老实标注新鲜度**，
-    把「该复核了」这这件事变得可见。
+    取两者中**较新的**那个来算年龄。所以只要用户定期确认，
+    就不会因为「没改代码」而被判成过期。
 
-    reviewed 形如 "2026-09"：只到月，因为人工核对到月就够了，精确到日反而难维护。
+    reviewed 只到月（人工核对到月就够了，精确到日反而难维护）。
     """
     today = today or date.today()
-    if not reviewed:
-        return {"reviewed": None, "review_age_months": None, "needs_review": True}
-    try:
-        year, month = (int(x) for x in str(reviewed).split("-")[:2])
-    except (ValueError, TypeError):
-        return {"reviewed": reviewed, "review_age_months": None, "needs_review": True}
 
-    age = (today.year - year) * 12 + (today.month - month)
+    # 代码里标注的核对月份
+    base_month: tuple[int, int] | None = None
+    if reviewed:
+        try:
+            year, month = (int(x) for x in str(reviewed).split("-")[:2])
+            base_month = (year, month)
+        except (ValueError, TypeError):
+            base_month = None
+
+    # 用户确认过的日期
+    confirmed_date: date | None = None
+    if confirmed_at:
+        try:
+            confirmed_date = date.fromisoformat(str(confirmed_at)[:10])
+        except ValueError:
+            confirmed_date = None
+
+    # 取较新的：把月份的粒度统一成"该月 1 号"再比
+    candidates: list[tuple[int, int]] = []
+    if base_month:
+        candidates.append(base_month)
+    if confirmed_date:
+        candidates.append((confirmed_date.year, confirmed_date.month))
+
+    if not candidates:
+        # 两个来源都没有 —— 宁可提示，也不要静默让人以为它还是新的
+        return {
+            "reviewed": reviewed,
+            "confirmed_at": confirmed_at,
+            "review_age_months": None,
+            "needs_review": True,
+        }
+
+    effective = max(candidates)
+    age = (today.year - effective[0]) * 12 + (today.month - effective[1])
     return {
         "reviewed": reviewed,
+        "confirmed_at": confirmed_at,
+        "effective": "%04d-%02d" % effective,
         "review_age_months": age,
         "needs_review": age >= REVIEW_INTERVAL_MONTHS,
     }
 
 
 def review_summary(items: list[dict] | None = None, today: date | None = None) -> dict[str, Any]:
-    """整份精选数据的新鲜度汇总（页面顶部提示用）。"""
+    """整份精选数据的新鲜度汇总（页面顶部提示用）。
+
+    ⚠️ 调用 review_status 必须用**关键字**传 today ——
+    它的第二个位置参数是 confirmed_at，传错位会静默得出错误结果
+    （这个坑在改签名时真踩过，是测试抓出来的）。
+    """
     items = ENTRIES if items is None else items
     today = today or date.today()
     ages = []
     stale = 0
     for e in items:
-        st = review_status(e.get("reviewed"), today)
+        st = review_status(e.get("reviewed"), today=today)
         if st["review_age_months"] is not None:
             ages.append(st["review_age_months"])
         if st["needs_review"]:

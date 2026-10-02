@@ -30,6 +30,12 @@ def build_parser() -> argparse.ArgumentParser:
     dg = sub.add_parser("digest", help="生成并发送周报邮件")
     dg.add_argument("--print-only", action="store_true", help="只打印正文不发信")
 
+    rv = sub.add_parser("review", help="列出待复核的精选条目（不开网页也能复核）")
+    rv.add_argument("--limit", type=int, default=None, help="只列前 N 条")
+
+    rc = sub.add_parser("review-confirm", help="标记某条精选已复核（数据没变时的确认）")
+    rc.add_argument("entry_id", help="条目 id，如 zhipu")
+
     mg = sub.add_parser("migrate", help="把 SQLite 里的数据迁移到 PostgreSQL")
     mg.add_argument("--from", dest="source", required=True, help="源 SQLite 文件路径")
 
@@ -103,6 +109,51 @@ def _cmd_digest(print_only: bool) -> int:
     return 0 if (ok or "未配置 SMTP" in msg) else 2
 
 
+def _cmd_review(limit: int | None) -> int:
+    """打印待复核清单。
+
+    为什么要有命令行版本：真正会去复核的时刻，往往是在终端里干活的时候。
+    要专门打开网页才能看，复核就会一直往后拖。
+    输出做成 markdown，可以直接贴进笔记/issue 当核对清单。
+    """
+    from . import review
+
+    data = review.checklist()
+    items = data["items"][:limit] if limit else data["items"]
+
+    print(f"# 精选数据复核（共 {data['total']} 条，待复核 {data['pending']} 条）")
+    print(f"# 复核间隔：{data['interval_months']} 个月\n")
+    if not items:
+        print("全部都在有效期内，暂时不需要复核 ✅")
+        return 0
+
+    for it in items:
+        age = "从未核对" if it["age_months"] is None else f"{it['age_months']} 个月没核对"
+        print(f"## {it['name']}（{it['category_cn']}）— {age}")
+        if it.get("url"):
+            print(f"官网：{it['url']}")
+        if it.get("quota"):
+            print(f"当前记录：{it['quota']}")
+        print("要核对：")
+        for c in it["checkpoints"]:
+            print(f"  - [ ] {c}")
+        print()
+    print(f"核对完用这个标记： python -m app.cli review-confirm <条目id>")
+    return 0
+
+
+def _cmd_review_confirm(entry_id: str) -> int:
+    from . import review
+
+    try:
+        r = review.confirm(entry_id)
+    except ValueError as exc:
+        print(f"失败: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(r, ensure_ascii=False))
+    return 0
+
+
 def _cmd_migrate(source: str) -> int:
     from . import database, migrate
 
@@ -127,6 +178,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_check_links(args.limit)
     if args.command == "digest":
         return _cmd_digest(args.print_only)
+    if args.command == "review":
+        return _cmd_review(args.limit)
+    if args.command == "review-confirm":
+        return _cmd_review_confirm(args.entry_id)
     if args.command == "migrate":
         return _cmd_migrate(args.source)
     return 1  # pragma: no cover - argparse 已经拦截
